@@ -11,13 +11,17 @@ export interface ChatSnapshot {
   name: string
   messages: SceneMessage[]
 }
-export interface Profile {
+export interface GenerationTargetRef {
+  kind: 'profile' | 'model'
   id: string
+}
+export interface GenerationTarget extends GenerationTargetRef {
   name: string
   model: string
 }
 export interface Settings {
   profileId: string
+  generationTargetKind: GenerationTargetRef['kind']
   maxTokens: number
   instructions: string
   instructionPresets: InstructionPreset[]
@@ -43,10 +47,10 @@ export interface Store {
 }
 export interface Host {
   readChat(): Promise<ChatSnapshot | null>
-  listProfiles(): Profile[]
+  listGenerationTargets(): GenerationTarget[]
   readStore(): Promise<unknown>
   writeStore(store: Store): Promise<void>
-  generate(profileId: string, prompt: string, maxTokens: number, signal: AbortSignal,
+  generate(target: GenerationTargetRef, prompt: string, maxTokens: number, signal: AbortSignal,
     progress: (text: string) => void): Promise<string>
   subscribe(handler: () => void): () => void
 }
@@ -58,6 +62,22 @@ export interface HostMessage {
   is_system?: boolean
 }
 export interface ConnectionProfile { id: string; name?: string; model?: string; api?: string }
+export interface SavedModelTarget {
+  schemaVersion?: number
+  kind: string
+  mode: string
+  id: string
+  name?: string
+  api: string
+  model: string
+  proxy?: string
+  'custom-api-format'?: string
+  'api-url'?: string
+  secretRef?: { key: string; id: string }
+  adapterHints?: { claudePromptCaching?: string; openaiResponsesMode?: string }
+}
+export interface ProxyPreset { name: string; url: string; password?: string }
+export type GenerationResponse = { content?: string } | (() => AsyncGenerator<{ text: string; state?: { reasoning?: string } }>)
 export interface HostContext {
   chat: HostMessage[]
   chatId?: string
@@ -66,16 +86,23 @@ export interface HostContext {
   characters?: Array<{ avatar?: string; name?: string }>
   groups?: Array<{ id: string; name?: string }>
   chatMetadata?: { integrity?: string }
-  extensionSettings: Record<string, unknown> & { disabledExtensions?: string[] }
+  extensionSettings: Record<string, unknown> & {
+    disabledExtensions?: string[]
+    connectionManager?: { modelTargets?: SavedModelTarget[] }
+  }
   saveSettingsDebounced(): void
-  CONNECT_API_MAP?: Record<string, { selected?: string }>
+  CONNECT_API_MAP?: Record<string, { selected?: string; source?: string }>
   eventSource: { on(event: string, callback: () => void): unknown; removeListener(event: string, callback: () => void): unknown }
   eventTypes: Record<string, string>
   ConnectionManagerRequestService?: {
     getSupportedProfiles(): ConnectionProfile[]
     sendRequest(id: string, messages: Array<{ role: string; content: string }>, maxTokens: number,
       options: { stream: boolean; signal: AbortSignal; extractData: boolean; includePreset: boolean }):
-      Promise<{ content?: string } | (() => AsyncGenerator<{ text: string; state?: { reasoning?: string } }>)>
+      Promise<GenerationResponse>
+  }
+  ChatCompletionService?: {
+    processRequest(payload: Record<string, unknown>, options: { presetName?: string }, extractData: boolean,
+      signal: AbortSignal): Promise<GenerationResponse>
   }
 }
 export interface TTHost {

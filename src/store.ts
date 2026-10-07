@@ -35,6 +35,7 @@ export function normalizeSettings(value: unknown): Settings {
   const active = presets.find(preset => preset.id === item.activeInstructionPresetId) || presets[0]
   return {
     profileId: typeof item.profileId === 'string' ? item.profileId : '',
+    generationTargetKind: item.generationTargetKind === 'model' ? 'model' : 'profile',
     maxTokens: typeof item.maxTokens === 'number' && Number.isInteger(item.maxTokens)
       && item.maxTokens >= 256 && item.maxTokens <= 32768 ? item.maxTokens : 4096,
     instructionPresets: presets,

@@ -1,4 +1,5 @@
-import type { ChatSnapshot, Host, HostContext, Profile, Store, TTHost } from './types'
+import type { ChatSnapshot, GenerationResponse, GenerationTarget, Host, HostContext, ProxyPreset, Store, TTHost } from './types'
+import { readHostProxyPresets, savedModelPayload, savedModels } from './models'
 
 const NAMESPACE = 'st_threads'
 
@@ -10,7 +11,8 @@ function liveKey(context: HostContext): string | null {
   return JSON.stringify(['character', character.avatar, context.chatMetadata?.integrity || context.chatId])
 }
 
-export function createHost(getContext: () => HostContext, tt?: TTHost): Host {
+export function createHost(getContext: () => HostContext, tt?: TTHost,
+  readProxies: () => Promise<ProxyPreset[]> = readHostProxyPresets): Host {
   // Choose the storage backend once for the session; never silently fall back on an I/O error.
   const storage = tt?.api?.extension?.store
   return {
@@ -30,15 +32,18 @@ export function createHost(getContext: () => HostContext, tt?: TTHost): Host {
       return { key: `${tt ? 'tt' : 'st'}:${context.groupId ? 'group' : 'character'}:${stable}`,
         name: `${group?.name || character?.name || 'Chat'} · ${context.chatId}`, messages }
     },
-    listProfiles(): Profile[] {
+    listGenerationTargets(): GenerationTarget[] {
       const context = getContext()
       const service = context.ConnectionManagerRequestService
-      if (!service || context.extensionSettings.disabledExtensions?.includes('connection-manager')) {
-        throw new Error('Enable Connection Manager to choose a generation profile.')
+      if (context.extensionSettings.disabledExtensions?.includes('connection-manager')) {
+        throw new Error('Enable Connection Manager to choose a saved model or connection profile.')
       }
-      return service.getSupportedProfiles()
+      const models: GenerationTarget[] = tt && context.ChatCompletionService
+        ? savedModels(context).map(item => ({ kind: 'model', id: item.id, name: item.name || item.model, model: item.model })) : []
+      const profiles: GenerationTarget[] = (service?.getSupportedProfiles() || [])
         .filter(item => item.api && context.CONNECT_API_MAP?.[item.api]?.selected === 'openai')
-        .map(item => ({ id: item.id, name: item.name || item.id, model: item.model || '' }))
+        .map(item => ({ kind: 'profile', id: item.id, name: item.name || item.id, model: item.model || '' }))
+      return [...models, ...profiles]
     },
     async readStore(): Promise<unknown> {
       if (storage) {
@@ -56,14 +61,23 @@ export function createHost(getContext: () => HostContext, tt?: TTHost): Host {
         context.saveSettingsDebounced()
       }
     },
-    async generate(profileId, prompt, maxTokens, signal, progress): Promise<string> {
+    async generate(target, prompt, maxTokens, signal, progress): Promise<string> {
       const context = getContext()
-      if (!this.listProfiles().some(item => item.id === profileId)) {
-        throw new Error('Select an available Chat Completion profile in Connection Manager.')
+      signal.throwIfAborted()
+      if (!this.listGenerationTargets().some(item => item.id === target.id && item.kind === target.kind)) {
+        throw new Error('Select an available saved model or Chat Completion profile, then refresh this panel.')
       }
-      const service = context.ConnectionManagerRequestService!
-      const output = await service.sendRequest(profileId, [{ role: 'user', content: prompt }], maxTokens,
-        { stream: true, signal, extractData: true, includePreset: true })
+      let output: GenerationResponse
+      if (target.kind === 'model') {
+        const model = savedModels(context).find(item => item.id === target.id)!
+        const payload = await savedModelPayload(model, context, prompt, maxTokens, signal, readProxies)
+        signal.throwIfAborted()
+        output = await context.ChatCompletionService!.processRequest(payload, {}, true, signal)
+      } else {
+        output = await context.ConnectionManagerRequestService!.sendRequest(target.id,
+          [{ role: 'user', content: prompt }], maxTokens,
+          { stream: true, signal, extractData: true, includePreset: true })
+      }
       let text = ''
       if (typeof output === 'function') {
         for await (const chunk of output()) {
@@ -81,7 +95,9 @@ export function createHost(getContext: () => HostContext, tt?: TTHost): Host {
     subscribe(handler): () => void {
       const context = getContext()
       const names = ['CHAT_CHANGED', 'CHAT_RENAMED', 'CHAT_DELETED', 'GROUP_CHAT_DELETED',
-        'MESSAGE_SENT', 'MESSAGE_RECEIVED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED']
+        'MESSAGE_SENT', 'MESSAGE_RECEIVED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED',
+        'MODEL_TARGET_CREATED', 'MODEL_TARGET_UPDATED', 'MODEL_TARGET_DELETED',
+        'CONNECTION_PROFILE_CREATED', 'CONNECTION_PROFILE_UPDATED', 'CONNECTION_PROFILE_DELETED']
       const events = [...new Set(names.map(name => context.eventTypes[name]).filter(Boolean))]
       for (const event of events) context.eventSource.on(event, handler)
       return () => { for (const event of events) context.eventSource.removeListener(event, handler) }

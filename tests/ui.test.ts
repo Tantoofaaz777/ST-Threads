@@ -56,7 +56,7 @@ test('mounts the launcher, selects messages, generates a feed and cleans up the 
   const selected = document.querySelector<HTMLInputElement>('[data-index="0"]')!
   selected.click()
   const profile = document.querySelector<HTMLSelectElement>('[data-profile]')!
-  profile.value = 'profile'
+  profile.value = JSON.stringify(['profile', 'profile'])
   profile.dispatchEvent(new browser.Event('change', { bubbles: true }) as any)
   expect(button('[data-generate]').disabled).toBe(false)
   button('[data-generate]').click()
@@ -96,7 +96,7 @@ test('a save failure keeps the result and allows retrying', async () => {
   cleanup = await mountUi(f.host)
   document.querySelector<HTMLInputElement>('[data-index="0"]')!.click()
   const profile = document.querySelector<HTMLSelectElement>('[data-profile]')!
-  profile.value = 'profile'
+  profile.value = JSON.stringify(['profile', 'profile'])
   profile.dispatchEvent(new browser.Event('change') as any)
   button('[data-generate]').click()
   await settle(() => document.querySelector('[data-feeds]')!.textContent!.includes('Retry saving'))
@@ -143,7 +143,7 @@ test('creates, edits and switches presets, then generates the previewed range an
   expect(preview).toContain('# OUTPUT FORMAT')
   let sent = ''
   f.host.generate = async (_profile, prompt) => { sent = prompt; return modelOutput }
-  choose('[data-profile]', 'profile')
+  choose('[data-profile]', JSON.stringify(['profile', 'profile']))
   button('[data-generate]').click()
   await settle(() => document.querySelectorAll('.sth-feed').length === 1 && !button('[data-save-presets]').disabled)
   expect(sent).toBe(preview)
@@ -190,7 +190,7 @@ test('keeps preset drafts on save failure and blocks duplicate names before send
   let called = false
   f.host.generate = async () => { called = true; return modelOutput }
   document.querySelector<HTMLInputElement>('[data-index="0"]')!.click()
-  choose('[data-profile]', 'profile')
+  choose('[data-profile]', JSON.stringify(['profile', 'profile']))
   button('[data-generate]').click()
   await settle(() => document.querySelector('[data-status]')!.textContent!.includes('already exists'))
   expect(called).toBe(false)
@@ -231,4 +231,35 @@ test('remembers the preset for each chat while retaining edits during chat switc
   button('[data-refresh]').click()
   await settle(() => document.querySelector<HTMLSelectElement>('[data-preset]')!.value === 'a')
   expect(document.querySelector<HTMLTextAreaElement>('[data-instructions]')!.value).toBe('My analysis draft.')
+})
+
+test('groups saved models and profiles, remembers model choice, and disables generation when it is removed', async () => {
+  const f = fixture()
+  let hasModel = true
+  f.host.listGenerationTargets = () => [
+    ...(hasModel ? [{ kind: 'model' as const, id: 'same-id', name: 'Saved model', model: 'my-model' }] : []),
+    { kind: 'profile', id: 'same-id', name: 'Profile', model: 'other-model' },
+  ]
+  cleanup = await mountUi(f.host)
+  expect([...document.querySelectorAll<HTMLOptGroupElement>('[data-profile] optgroup')].map(group => group.label))
+    .toEqual(['Saved models', 'Connection profiles'])
+  choose('[data-profile]', JSON.stringify(['model', 'same-id']))
+  document.querySelector<HTMLInputElement>('[data-index="0"]')!.click()
+  f.host.generate = async target => {
+    expect(target).toEqual({ kind: 'model', id: 'same-id' })
+    return modelOutput
+  }
+  button('[data-generate]').click()
+  await settle(() => document.querySelectorAll('.sth-feed').length === 1 && !button('[data-save-presets]').disabled)
+  expect(f.writes.at(-1)!.settings).toMatchObject({ profileId: 'same-id', generationTargetKind: 'model' })
+  cleanup(); cleanup = undefined
+  cleanup = await mountUi(f.host)
+  expect(document.querySelector<HTMLSelectElement>('[data-profile]')!.value).toBe(JSON.stringify(['model', 'same-id']))
+  document.querySelector<HTMLInputElement>('[data-index="0"]')!.click()
+  expect(button('[data-generate]').disabled).toBe(false)
+  hasModel = false
+  f.change()
+  await settle(() => document.querySelectorAll('[data-profile] optgroup').length === 1)
+  expect(document.querySelector<HTMLSelectElement>('[data-profile]')!.value).toBe('')
+  expect(button('[data-generate]').disabled).toBe(true)
 })

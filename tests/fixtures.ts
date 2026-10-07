@@ -19,7 +19,7 @@ export function fixture() {
   let change = () => {}
   const host: Host = {
     async readChat() { return structuredClone(current) },
-    listProfiles() { return [{ id: 'profile', name: 'Teste', model: 'test-model' }] },
+    listGenerationTargets() { return [{ kind: 'profile', id: 'profile', name: 'Test', model: 'test-model' }] },
     async readStore() { return structuredClone(store) },
     async writeStore(value) { store = structuredClone(value); writes.push(structuredClone(value)) },
     async generate(_profile, _prompt, _tokens, signal, progress) {
@@ -37,7 +37,7 @@ export function context(): HostContext {
     characters: [{ avatar: 'card.png', name: 'Character' }], groups: [], chatMetadata: { integrity: 'chat-uuid' },
     chat: [{ mes: 'Hidden', is_system: true }, { mes: 'Scene', is_user: true, name: 'You' }],
     extensionSettings: { disabledExtensions: [] }, saveSettingsDebounced() {},
-    CONNECT_API_MAP: { claude: { selected: 'openai' }, kobold: { selected: 'textgenerationwebui' } },
+    CONNECT_API_MAP: { claude: { selected: 'openai', source: 'claude' }, kobold: { selected: 'textgenerationwebui' } },
     eventTypes: { CHAT_CHANGED: 'chat_id_changed', MESSAGE_RECEIVED: 'message_received' },
     eventSource: { on() {}, removeListener() {} },
     ConnectionManagerRequestService: {

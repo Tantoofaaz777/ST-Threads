@@ -2,7 +2,7 @@ import { serializeFeedAsPlainText } from './core/feed'
 import type { ThreadverseComment } from './core/shared'
 import { appendFeed, Generation, sameMessage, SaveFeedError, scenePrompt } from './generation'
 import { DEFAULT_INSTRUCTIONS, MAX_INSTRUCTION_PRESETS, Repository, validateSettings } from './store'
-import type { ChatSnapshot, Host, SavedFeed, Settings } from './types'
+import type { ChatSnapshot, GenerationTarget, Host, SavedFeed, Settings } from './types'
 
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = '') {
   const item = document.createElement(tag)
@@ -33,6 +33,8 @@ export async function mountUi(host: Host): Promise<() => void> {
   let activePresetId = store.settings.activeInstructionPresetId
   let presetsDirty = false
   const chatPresetSelections = new Map<string, string>()
+  let availableTargets: GenerationTarget[] = []
+  const targetValue = (target: { kind: string; id: string }) => JSON.stringify([target.kind, target.id])
 
   const launcher = element('div', 'sth-launcher')
   const openButton = element('button', 'menu_button', 'Open ST Threads')
@@ -79,7 +81,7 @@ export async function mountUi(host: Host): Promise<() => void> {
           </details>
           <p class="sth-hint">These instructions are sent with the selected messages. The feed JSON format is added automatically.</p>
           <div class="sth-toolbar"><button type="button" data-save-presets>Save presets</button><span class="sth-hint" data-preset-status></span></div>
-          <label class="sth-field">Generation profile<select data-profile><option value="">Choose a profile…</option></select></label>
+          <label class="sth-field">Generation model<select data-profile><option value="">Choose a model or profile…</option></select></label>
           <p class="sth-hint" data-profile-hint></p>
           <div class="sth-toolbar"><button type="button" class="sth-primary" data-generate>Generate feed</button>
             <button type="button" data-cancel hidden>Cancel generation</button>
@@ -186,7 +188,9 @@ export async function mountUi(host: Host): Promise<() => void> {
   }
   function settings(): Settings {
     capturePreset()
-    return validateSettings({ profileId: profile.value, maxTokens: Number(tokens.value), instructions: instructions.value,
+    const target = availableTargets.find(item => targetValue(item) === profile.value)
+    return validateSettings({ profileId: target?.id || '', generationTargetKind: target?.kind || 'profile',
+      maxTokens: Number(tokens.value), instructions: instructions.value,
       instructionPresets: structuredClone(presetDraft), activeInstructionPresetId: activePresetId })
   }
   function controls(): void {
@@ -206,22 +210,36 @@ export async function mountUi(host: Host): Promise<() => void> {
     updatePreview()
   }
   function profiles(): void {
-    const previous = profile.value || store.settings.profileId
+    const previous = profile.value || targetValue({ kind: store.settings.generationTargetKind, id: store.settings.profileId })
     const option = (text: string, value: string) => {
       const node = element('option', '', text)
       node.value = value
       return node
     }
-    profile.replaceChildren(option('Choose a profile…', ''))
+    profile.replaceChildren(option('Choose a model or profile…', ''))
+    availableTargets = []
     try {
-      const available = host.listProfiles()
-      for (const item of available) profile.append(option(`${item.name}${item.model ? ` · ${item.model}` : ''}`, item.id))
-      profile.value = available.some(item => item.id === previous) ? previous : ''
-      query('[data-profile-hint]').textContent = available.length
-        ? 'Uses the selected profile without changing your roleplay connection.'
-        : 'Create a Chat Completion profile in Connection Manager, then refresh this panel.'
+      availableTargets = host.listGenerationTargets()
+      for (const kind of ['model', 'profile'] as const) {
+        const targets = availableTargets.filter(item => item.kind === kind)
+        if (!targets.length) continue
+        const group = element('optgroup')
+        group.label = kind === 'model' ? 'Saved models' : 'Connection profiles'
+        for (const item of targets) group.append(option(`${item.name}${item.model ? ` · ${item.model}` : ''}`, targetValue(item)))
+        profile.append(group)
+      }
+      profile.value = availableTargets.some(item => targetValue(item) === previous) ? previous : ''
+      targetHint()
     } catch (error) { query('[data-profile-hint]').textContent = errorText(error) }
     controls()
+  }
+  function targetHint(): void {
+    const target = availableTargets.find(item => targetValue(item) === profile.value)
+    query('[data-profile-hint]').textContent = target?.kind === 'model'
+      ? 'Uses the saved model connection and your feed instructions. Temperature: 0.8; no roleplay generation preset is applied.'
+      : target?.kind === 'profile' ? 'Uses the profile and its generation settings without changing your roleplay connection.'
+      : availableTargets.length ? 'Choose a saved model or connection profile for this feed.'
+      : 'Save a Chat Completion model or connection profile in Connection Manager, then refresh this panel.'
   }
   function renderMessages(): void {
     const queryText = search.value.trim().toLocaleLowerCase()
@@ -454,7 +472,7 @@ export async function mountUi(host: Host): Promise<() => void> {
   dialog.addEventListener('click', click)
   dialog.addEventListener('change', changed)
   search.addEventListener('input', () => { visibleCount = 100; renderMessages() })
-  profile.addEventListener('change', controls)
+  profile.addEventListener('change', () => { targetHint(); controls() })
   dialog.addEventListener('input', event => {
     const input = event.target as HTMLInputElement
     if (input.matches('[data-instructions], [data-preset-name]')) {

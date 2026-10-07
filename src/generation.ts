@@ -36,7 +36,7 @@ export class Generation {
     if (this.active) throw new Error('A generation is already in progress.')
     const selected = expected.messages.filter(item => indices.has(item.index))
     if (!selected.length) throw new Error('Select at least one message.')
-    if (!settings.profileId) throw new Error('Choose a generation profile.')
+    if (!settings.profileId) throw new Error('Choose a generation model or connection profile.')
     const input = normalizeSettings(structuredClone(settings))
     const scene = structuredClone(selected)
     const controller = new AbortController()
@@ -50,7 +50,7 @@ export class Generation {
       })) throw new Error('The scene changed. Refresh the list and check your selection before generating.')
       // Own the scene and settings before awaiting the network, even if the UI changes chat.
       const prompt = scenePrompt(scene, label, input.instructions)
-      const output = await this.host.generate(input.profileId, prompt, input.maxTokens,
+      const output = await this.host.generate({ kind: input.generationTargetKind, id: input.profileId }, prompt, input.maxTokens,
         controller.signal, progress)
       controller.signal.throwIfAborted()
       const feed = parseGeneratedThreadverseFeed(output)

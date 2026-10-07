@@ -183,11 +183,11 @@ describe('ST/TT host adapter', () => {
     const before = structuredClone(ctx.chat)
     const host = createHost(() => ctx)
     const progress: string[] = []
-    expect(await host.generate('chat-profile', 'Prompt', 1000, new AbortController().signal, text => progress.push(text))).toBe('Hello world')
+    expect(await host.generate({ kind: 'profile', id: 'chat-profile' }, 'Prompt', 1000, new AbortController().signal, text => progress.push(text))).toBe('Hello world')
     expect(progress).toEqual(['Hello', 'Hello world'])
     expect(ctx.chat).toEqual(before)
     expect(ctx.extensionSettings.connectionManager).toBeUndefined()
-    expect(host.listProfiles().map(item => item.id)).toEqual(['chat-profile'])
+    expect(host.listGenerationTargets().map(item => item.id)).toEqual(['chat-profile'])
   })
   test('excludes system and hidden messages without renumbering absolute indices', async () => {
     const ctx = context()
