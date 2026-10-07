@@ -20,6 +20,13 @@ export interface Settings {
   profileId: string
   maxTokens: number
   instructions: string
+  instructionPresets: InstructionPreset[]
+  activeInstructionPresetId: string
+}
+export interface InstructionPreset {
+  id: string
+  name: string
+  instructions: string
 }
 export interface SavedFeed {
   id: string
@@ -27,11 +34,12 @@ export interface SavedFeed {
   label: string
   scene: SceneMessage[]
   feed: ThreadverseFeed
+  generation?: { presetId: string; presetName: string; instructions: string }
 }
 export interface Store {
   version: 1
   settings: Settings
-  chats: Record<string, { name: string; feeds: SavedFeed[] }>
+  chats: Record<string, { name: string; feeds: SavedFeed[]; instructionPresetId?: string }>
 }
 export interface Host {
   readChat(): Promise<ChatSnapshot | null>

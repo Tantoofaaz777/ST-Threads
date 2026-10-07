@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { createHost } from '../src/host'
 import { Generation, SaveFeedError } from '../src/generation'
-import { DEFAULT_INSTRUCTIONS, normalizeSettings, normalizeStore, Repository } from '../src/store'
+import { DEFAULT_INSTRUCTIONS, normalizeSettings, normalizeStore, Repository, validateSettings } from '../src/store'
 import { parseGeneratedThreadverseFeed } from '../src/core/feed'
 import { chat, context, fixture, modelOutput } from './fixtures'
 
@@ -86,6 +86,53 @@ describe('independent generation', () => {
 })
 
 describe('persistence and parsing', () => {
+  test('migrates the existing single prompt without losing feeds or preferences', () => {
+    const oldFeed = { id: 'old', createdAt: '2026-10-07', label: 'Scene', scene: chat.messages,
+      feed: parseGeneratedThreadverseFeed(modelOutput) }
+    const state = normalizeStore({ version: 1, settings: { ...settings, instructions: 'Keep my custom prompt verbatim.\nSecond line.' },
+      chats: { [chat.key]: { name: chat.name, feeds: [oldFeed] } } })
+    expect(state.settings.instructionPresets).toEqual([{ id: 'default', name: 'Default',
+      instructions: 'Keep my custom prompt verbatim.\nSecond line.' }])
+    expect(state.settings.profileId).toBe('profile')
+    expect(state.chats[chat.key].feeds).toEqual([oldFeed])
+  })
+  test('uses the active preset instead of stale single-prompt settings and rejects invalid drafts', () => {
+    const state = normalizeSettings({ ...settings, instructionPresets: [
+      { id: 'a', name: 'Analysis', instructions: 'Analyze clues.' },
+      { id: 'b', name: 'Reactions', instructions: 'React with jokes.' },
+    ], activeInstructionPresetId: 'b' })
+    expect(state.instructions).toBe('React with jokes.')
+    expect(normalizeSettings({ ...state, activeInstructionPresetId: 'removed' }).activeInstructionPresetId).toBe('a')
+    expect(() => validateSettings({ ...state, instructionPresets: state.instructionPresets.map(item => ({ ...item, name: 'Same' })) })).toThrow('already exists')
+    expect(() => validateSettings({ ...state, instructionPresets: [{ ...state.instructionPresets[0], instructions: ' ' }] })).toThrow('instructions')
+  })
+  test('snapshots instructions before awaiting the host and preserves the chat preset while saving', async () => {
+    const f = fixture()
+    const input = normalizeSettings({ ...settings, instructionPresets: [
+      { id: 'theories', name: 'Theories', instructions: 'Look for clues and discuss theories.' },
+    ], activeInstructionPresetId: 'theories' })
+    const store = normalizeStore({ version: 1, settings: input,
+      chats: { [chat.key]: { name: chat.name, feeds: [], instructionPresetId: 'theories' } } })
+    f.setStore(store)
+    const readChat = f.host.readChat
+    f.host.readChat = async () => {
+      input.instructionPresets[0].instructions = 'Changed while waiting.'
+      input.instructions = 'Changed while waiting.'
+      return readChat()
+    }
+    f.host.generate = async (_id, prompt) => {
+      expect(prompt).toContain('Look for clues and discuss theories.')
+      expect(prompt).not.toContain('Changed while waiting.')
+      expect(prompt).toContain('She opened the door.')
+      expect(prompt).not.toContain('He was waiting.')
+      return modelOutput
+    }
+    const saved = await new Generation(f.host, new Repository(f.host)).run(chat, new Set([0]), 'Clue', input, () => {})
+    expect(saved.generation).toEqual({ presetId: 'theories', presetName: 'Theories', instructions: 'Look for clues and discuss theories.' })
+    const reloaded = normalizeStore(f.writes.at(-1))
+    expect(reloaded.chats[chat.key].instructionPresetId).toBe('theories')
+    expect(reloaded.chats[chat.key].feeds[0].generation).toEqual(saved.generation)
+  })
   test('updates the previous built-in language default and preserves custom instructions', () => {
     const oldDefault = DEFAULT_INSTRUCTIONS.replace('in English.', 'in Brazilian Portuguese.')
     expect(normalizeSettings({ instructions: oldDefault }).instructions).toBe(DEFAULT_INSTRUCTIONS)

@@ -454,14 +454,65 @@ Create a Reddit-style discussion with an opening post, varied usernames, nested 
 Write the discussion in English. Create 3 to 5 separate conversations, each with replies.`;
 var LEGACY_DEFAULT_INSTRUCTIONS = DEFAULT_INSTRUCTIONS.replace("in English.", "in Brazilian Portuguese.");
 var MAX_FEEDS_PER_CHAT = 10;
+var MAX_INSTRUCTION_PRESETS = 50;
+function migrateInstructions(text) {
+  return text.replace(/\r\n/g, `
+`) === LEGACY_DEFAULT_INSTRUCTIONS ? DEFAULT_INSTRUCTIONS : text;
+}
 function normalizeSettings(value) {
   const item = value && typeof value === "object" ? value : {};
+  const presets = [];
+  const ids = new Set;
+  const names = new Set;
+  if (Array.isArray(item.instructionPresets)) {
+    for (const preset of item.instructionPresets) {
+      if (!preset || typeof preset.id !== "string" || !preset.id.trim() || ids.has(preset.id) || typeof preset.name !== "string" || !preset.name.trim() || preset.name.trim().length > 100 || names.has(preset.name.trim().toLowerCase()) || typeof preset.instructions !== "string" || !preset.instructions.trim())
+        continue;
+      presets.push({ id: preset.id, name: preset.name.trim(), instructions: migrateInstructions(preset.instructions) });
+      ids.add(preset.id);
+      names.add(preset.name.trim().toLowerCase());
+    }
+  }
+  if (!presets.length)
+    presets.push({
+      id: "default",
+      name: "Default",
+      instructions: typeof item.instructions === "string" && item.instructions.trim() ? migrateInstructions(item.instructions) : DEFAULT_INSTRUCTIONS
+    });
+  const active = presets.find((preset) => preset.id === item.activeInstructionPresetId) || presets[0];
   return {
     profileId: typeof item.profileId === "string" ? item.profileId : "",
     maxTokens: typeof item.maxTokens === "number" && Number.isInteger(item.maxTokens) && item.maxTokens >= 256 && item.maxTokens <= 32768 ? item.maxTokens : 4096,
-    instructions: typeof item.instructions === "string" && item.instructions.trim() && item.instructions.replace(/\r\n/g, `
-`) !== LEGACY_DEFAULT_INSTRUCTIONS ? item.instructions : DEFAULT_INSTRUCTIONS
+    instructionPresets: presets,
+    activeInstructionPresetId: active.id,
+    instructions: active.instructions
   };
+}
+function validateSettings(input) {
+  if (!Number.isInteger(input.maxTokens) || input.maxTokens < 256 || input.maxTokens > 32768) {
+    throw new Error("The token limit must be an integer between 256 and 32768.");
+  }
+  if (!input.instructionPresets.length || input.instructionPresets.length > MAX_INSTRUCTION_PRESETS) {
+    throw new Error(`Keep between 1 and ${MAX_INSTRUCTION_PRESETS} instruction presets.`);
+  }
+  const ids = new Set;
+  const names = new Set;
+  for (const preset of input.instructionPresets) {
+    if (!preset.id.trim() || ids.has(preset.id))
+      throw new Error("Instruction preset IDs must be unique.");
+    const name = preset.name.trim();
+    if (!name || name.length > 100)
+      throw new Error("Preset names must contain 1 to 100 characters.");
+    if (names.has(name.toLowerCase()))
+      throw new Error(`A preset named "${name}" already exists.`);
+    if (!preset.instructions.trim())
+      throw new Error(`Enter the instructions for preset "${name}".`);
+    ids.add(preset.id);
+    names.add(name.toLowerCase());
+  }
+  if (!ids.has(input.activeInstructionPresetId))
+    throw new Error("Choose an instruction preset.");
+  return normalizeSettings(input);
 }
 function normalizeStore(value) {
   const input = value && typeof value === "object" ? value : {};
@@ -483,11 +534,20 @@ function normalizeStore(value) {
             label: item.label,
             createdAt: item.createdAt,
             scene: item.scene.filter((message) => message && Number.isInteger(message.index) && typeof message.content === "string" && typeof message.name === "string" && (message.role === "user" || message.role === "assistant")),
-            feed: parseThreadverseFeed(JSON.stringify(item.feed))
+            feed: parseThreadverseFeed(JSON.stringify(item.feed)),
+            ...item.generation && typeof item.generation.presetId === "string" && typeof item.generation.presetName === "string" && typeof item.generation.instructions === "string" ? { generation: {
+              presetId: item.generation.presetId,
+              presetName: item.generation.presetName,
+              instructions: item.generation.instructions
+            } } : {}
           });
         } catch {}
       }
-      result.chats[key] = { name: raw.name, feeds };
+      result.chats[key] = {
+        name: raw.name,
+        feeds,
+        ...result.settings.instructionPresets.some((preset) => preset.id === raw.instructionPresetId) ? { instructionPresetId: raw.instructionPresetId } : {}
+      };
     }
   }
   return result;
@@ -523,6 +583,7 @@ class Repository {
 function appendFeed(store, origin, saved) {
   const previous = store.chats[origin.key]?.feeds || [];
   store.chats[origin.key] = {
+    ...store.chats[origin.key],
     name: origin.name,
     feeds: [...previous.filter((item) => item.id !== saved.id), saved].slice(-MAX_FEEDS_PER_CHAT)
   };
@@ -544,7 +605,7 @@ function scenePrompt(scene, label, instructions) {
     fandomContinuity: [],
     recentRange: {
       label: label.trim() || "Selected scene",
-      content: scene.map((item) => `[${item.name} / ${item.role}]
+      content: scene.map((item) => `[#${item.index + 1} / ${item.name} / ${item.role}]
 ${item.content}`).join(`
 
 `)
@@ -580,6 +641,8 @@ class Generation {
       throw new Error("Select at least one message.");
     if (!settings.profileId)
       throw new Error("Choose a generation profile.");
+    const input = normalizeSettings(structuredClone(settings));
+    const scene = structuredClone(selected);
     const controller = new AbortController;
     this.active = controller;
     try {
@@ -590,9 +653,8 @@ class Generation {
         return !current || !sameMessage(item, current);
       }))
         throw new Error("The scene changed. Refresh the list and check your selection before generating.");
-      const scene = structuredClone(selected);
-      const prompt = scenePrompt(scene, label, settings.instructions);
-      const output = await this.host.generate(settings.profileId, prompt, settings.maxTokens, controller.signal, progress);
+      const prompt = scenePrompt(scene, label, input.instructions);
+      const output = await this.host.generate(input.profileId, prompt, input.maxTokens, controller.signal, progress);
       controller.signal.throwIfAborted();
       const feed = parseGeneratedThreadverseFeed(output);
       const saved = {
@@ -600,7 +662,12 @@ class Generation {
         createdAt: new Date().toISOString(),
         label: label.trim() || "Selected scene",
         scene,
-        feed
+        feed,
+        generation: {
+          presetId: input.activeInstructionPresetId,
+          presetName: input.instructionPresets.find((preset) => preset.id === input.activeInstructionPresetId).name,
+          instructions: input.instructions
+        }
       };
       try {
         await this.repository.update((store) => {
@@ -653,6 +720,10 @@ async function mountUi(host) {
   let unsaved = null;
   let unsavedChat = null;
   let operationPending = false;
+  let presetDraft = structuredClone(store.settings.instructionPresets);
+  let activePresetId = store.settings.activeInstructionPresetId;
+  let presetsDirty = false;
+  const chatPresetSelections = new Map;
   const launcher = element("div", "sth-launcher");
   const openButton = element("button", "menu_button", "Open ST Threads");
   openButton.type = "button";
@@ -687,17 +758,28 @@ async function mountUi(host) {
         </div>
         <div class="sth-card">
           <label class="sth-field">Scene title<input type="text" data-label maxlength="200" placeholder="Chapter, episode or scene"></label>
+          <label class="sth-field">Instruction preset<select data-preset></select></label>
+          <div class="sth-toolbar"><button type="button" data-new-preset>New preset</button>
+            <button type="button" data-duplicate-preset>Duplicate</button>
+            <button type="button" data-delete-preset>Delete preset</button></div>
+          <details data-preset-editor open><summary>Edit instruction preset</summary>
+            <label class="sth-field">Preset name<input type="text" data-preset-name maxlength="100"></label>
+            <label class="sth-field">Fandom instructions<textarea data-instructions rows="9"></textarea></label>
+          </details>
+          <p class="sth-hint">These instructions are sent with the selected messages. The feed JSON format is added automatically.</p>
+          <div class="sth-toolbar"><button type="button" data-save-presets>Save presets</button><span class="sth-hint" data-preset-status></span></div>
           <label class="sth-field">Generation profile<select data-profile><option value="">Choose a profile…</option></select></label>
           <p class="sth-hint" data-profile-hint></p>
           <div class="sth-toolbar"><button type="button" class="sth-primary" data-generate>Generate feed</button>
-            <button type="button" data-cancel hidden>Cancel generation</button></div>
+            <button type="button" data-cancel hidden>Cancel generation</button>
+            <button type="button" data-preview>Preview prompt</button></div>
+          <details data-prompt-preview hidden><summary>Prompt sent to the model</summary><pre class="sth-output" data-prompt></pre></details>
           <details><summary>Model response</summary><pre class="sth-output" data-output></pre></details>
         </div>
       </section>
       <section data-panel="feeds" hidden><p class="sth-hint">The latest 10 feeds are saved for each chat.</p><div data-feeds></div></section>
       <section data-panel="settings" hidden><div class="sth-card">
         <label class="sth-field">Response token limit<input type="number" data-tokens min="256" max="32768" step="1"></label>
-        <label class="sth-field">Fandom instructions<textarea data-instructions rows="9"></textarea></label>
         <p class="sth-hint">This first version discusses only the selected scene. Continuity between feeds and regex support will follow in future updates.</p>
         <button type="button" data-save-settings>Save settings</button>
       </div></section>
@@ -714,9 +796,91 @@ async function mountUi(host) {
   const search = query("[data-search]");
   const sceneLabel = query("[data-label]");
   const instructions = query("[data-instructions]");
+  const presetSelect = query("[data-preset]");
+  const presetName = query("[data-preset-name]");
   const tokens = query("[data-tokens]");
   instructions.value = store.settings.instructions;
   tokens.value = String(store.settings.maxTokens);
+  function capturePreset() {
+    const draft = presetDraft.find((item) => item.id === activePresetId);
+    if (draft.name !== presetName.value || draft.instructions !== instructions.value) {
+      draft.name = presetName.value;
+      draft.instructions = instructions.value;
+      presetsDirty = true;
+    }
+  }
+  function renderPresets() {
+    if (!presetDraft.some((item) => item.id === activePresetId))
+      activePresetId = presetDraft[0].id;
+    presetSelect.replaceChildren();
+    for (const item of presetDraft) {
+      const option = element("option", "", item.name.trim() || "Unnamed preset");
+      option.value = item.id;
+      presetSelect.append(option);
+    }
+    presetSelect.value = activePresetId;
+    const active = presetDraft.find((item) => item.id === activePresetId);
+    presetName.value = active.name;
+    instructions.value = active.instructions;
+    controls();
+    updatePreview();
+  }
+  function selectPreset(id) {
+    if (!presetDraft.some((item) => item.id === id))
+      return;
+    capturePreset();
+    activePresetId = id;
+    presetsDirty = true;
+    if (snapshot)
+      chatPresetSelections.set(snapshot.key, id);
+    renderPresets();
+  }
+  function editPreset(action) {
+    if (operationPending || generation.running)
+      return;
+    capturePreset();
+    if (action === "delete") {
+      if (presetDraft.length <= 1)
+        return;
+      presetDraft = presetDraft.filter((item) => item.id !== activePresetId);
+      for (const [key, id] of chatPresetSelections)
+        if (id === activePresetId)
+          chatPresetSelections.delete(key);
+      activePresetId = presetDraft[0].id;
+    } else {
+      if (presetDraft.length >= MAX_INSTRUCTION_PRESETS) {
+        status(`Instruction presets are limited to ${MAX_INSTRUCTION_PRESETS}.`, true);
+        return;
+      }
+      const base = action === "new" ? "New preset" : `${presetName.value.trim() || "Preset"} copy`.slice(0, 90);
+      let name = base;
+      for (let suffix = 2;presetDraft.some((item) => item.name.trim().toLowerCase() === name.toLowerCase()); suffix++)
+        name = `${base} ${suffix}`;
+      activePresetId = crypto.randomUUID();
+      presetDraft.push({ id: activePresetId, name, instructions: action === "new" ? DEFAULT_INSTRUCTIONS : instructions.value });
+    }
+    presetsDirty = true;
+    if (snapshot)
+      chatPresetSelections.set(snapshot.key, activePresetId);
+    renderPresets();
+    query("[data-preset-editor]").open = true;
+    if (action !== "delete") {
+      presetName.focus();
+      presetName.select();
+    }
+    status("Preset changes are kept in the panel. Save presets or generate a feed to save them.");
+  }
+  function updatePreview(show = false) {
+    const preview = query("[data-prompt-preview]");
+    if (show) {
+      preview.hidden = false;
+      preview.open = true;
+    }
+    if (preview.hidden)
+      return;
+    const scene = (snapshot?.messages || []).filter((item) => selection.has(item.index));
+    query("[data-prompt]").textContent = scene.length ? scenePrompt(scene, sceneLabel.value, instructions.value) : "Select at least one message to preview the prompt.";
+  }
   function status(text, error = false) {
     if (disposed)
       return;
@@ -732,13 +896,14 @@ async function mountUi(host) {
     }
   }
   function settings() {
-    const maxTokens = Number(tokens.value);
-    if (!Number.isInteger(maxTokens) || maxTokens < 256 || maxTokens > 32768) {
-      throw new Error("The token limit must be an integer between 256 and 32768.");
-    }
-    if (!instructions.value.trim())
-      throw new Error("Enter the fandom instructions.");
-    return normalizeSettings({ profileId: profile.value, maxTokens, instructions: instructions.value });
+    capturePreset();
+    return validateSettings({
+      profileId: profile.value,
+      maxTokens: Number(tokens.value),
+      instructions: instructions.value,
+      instructionPresets: structuredClone(presetDraft),
+      activeInstructionPresetId: activePresetId
+    });
   }
   function controls() {
     const busy = operationPending || generation.running;
@@ -746,8 +911,15 @@ async function mountUi(host) {
     query("[data-cancel]").hidden = !generation.running;
     query("[data-cancel]").disabled = generation.committing;
     query("[data-save-settings]").disabled = busy;
+    for (const input of dialog.querySelectorAll("[data-preset], [data-preset-name], [data-instructions], [data-tokens], [data-save-presets], [data-new-preset], [data-duplicate-preset], [data-delete-preset]"))
+      input.disabled = busy;
+    query("[data-delete-preset]").disabled = busy || presetDraft.length <= 1;
+    query("[data-new-preset]").disabled = busy || presetDraft.length >= MAX_INSTRUCTION_PRESETS;
+    query("[data-duplicate-preset]").disabled = busy || presetDraft.length >= MAX_INSTRUCTION_PRESETS;
+    query("[data-preset-status]").textContent = presetsDirty ? "Unsaved preset changes" : "Save or generate to remember this chat's selection.";
     profile.disabled = busy;
     query("[data-count]").textContent = `${selection.size} selected`;
+    updatePreview();
   }
   function profiles() {
     const previous = profile.value || store.settings.profileId;
@@ -821,6 +993,11 @@ ${item.content}`.toLocaleLowerCase().includes(queryText));
       scene.append(element("p", "sth-body", `#${message.index + 1} · ${message.name}
 ${message.content}`));
     card.append(scene);
+    if (item.generation) {
+      const prompt = element("details", "sth-scene");
+      prompt.append(element("summary", "", `Instructions used · ${item.generation.presetName}`), element("p", "sth-body", item.generation.instructions));
+      card.append(prompt);
+    }
     for (const comment of item.feed.comments)
       card.append(renderComment(comment));
     return card;
@@ -852,7 +1029,8 @@ ${message.content}`));
       const [next, nextStore] = await Promise.all([host.readChat(), repository.read()]);
       if (disposed || request !== revision)
         return;
-      if (next?.key !== snapshot?.key) {
+      const chatChanged = next?.key !== snapshot?.key;
+      if (chatChanged) {
         selection.clear();
         sceneLabel.value = "";
         visibleCount = 100;
@@ -865,6 +1043,11 @@ ${message.content}`));
       }
       snapshot = next;
       store = nextStore;
+      if (!presetsDirty && !operationPending && !generation.running)
+        presetDraft = structuredClone(store.settings.instructionPresets);
+      if (chatChanged)
+        activePresetId = (next ? chatPresetSelections.get(next.key) || store.chats[next.key]?.instructionPresetId : undefined) || store.settings.activeInstructionPresetId;
+      renderPresets();
       query("[data-chat]").textContent = next?.name || "Open a chat to get started.";
       profiles();
       renderMessages();
@@ -879,17 +1062,34 @@ ${message.content}`));
       }
     }
   }
+  async function persistSettings(input, origin) {
+    store = await repository.update((data) => {
+      data.settings = input;
+      const ids = new Set(input.instructionPresets.map((item) => item.id));
+      for (const savedChat of Object.values(data.chats)) {
+        if (savedChat.instructionPresetId && !ids.has(savedChat.instructionPresetId))
+          delete savedChat.instructionPresetId;
+      }
+      if (origin)
+        data.chats[origin.key] = {
+          ...data.chats[origin.key],
+          name: origin.name,
+          feeds: data.chats[origin.key]?.feeds || [],
+          instructionPresetId: input.activeInstructionPresetId
+        };
+    });
+    presetsDirty = false;
+  }
   async function saveSettings() {
     if (operationPending || generation.running)
       return;
     try {
       const input = settings();
+      const origin = snapshot ? structuredClone(snapshot) : null;
       operationPending = true;
       controls();
-      store = await repository.update((data) => {
-        data.settings = input;
-      });
-      status("Settings saved.");
+      await persistSettings(input, origin);
+      status("Settings and instruction presets saved.");
     } catch (error) {
       status(errorText(error), true);
     } finally {
@@ -908,9 +1108,7 @@ ${message.content}`));
       const input = settings();
       operationPending = true;
       controls();
-      store = await repository.update((data) => {
-        data.settings = input;
-      });
+      await persistSettings(input, origin);
       if (disposed)
         return;
       query("[data-output]").textContent = "";
@@ -992,7 +1190,17 @@ ${message.content}`));
       renderMessages();
     } else if (button.hasAttribute("data-save-settings")) {
       saveSettings();
-    } else if (button.hasAttribute("data-generate")) {
+    } else if (button.hasAttribute("data-save-presets")) {
+      saveSettings();
+    } else if (button.hasAttribute("data-new-preset"))
+      editPreset("new");
+    else if (button.hasAttribute("data-duplicate-preset"))
+      editPreset("duplicate");
+    else if (button.hasAttribute("data-delete-preset"))
+      editPreset("delete");
+    else if (button.hasAttribute("data-preview"))
+      updatePreview(true);
+    else if (button.hasAttribute("data-generate")) {
       generate();
     } else if (button.hasAttribute("data-cancel")) {
       generation.cancel();
@@ -1010,7 +1218,13 @@ ${message.content}`));
   }
   function changed(event) {
     const input = event.target;
-    if (input.matches("[data-index]")) {
+    if (input.matches("[data-preset]")) {
+      if (operationPending || generation.running) {
+        presetSelect.value = activePresetId;
+        return;
+      }
+      selectPreset(input.value);
+    } else if (input.matches("[data-index]")) {
       const index = Number(input.dataset.index);
       if (input.checked)
         selection.add(index);
@@ -1038,6 +1252,18 @@ ${message.content}`));
     renderMessages();
   });
   profile.addEventListener("change", controls);
+  dialog.addEventListener("input", (event) => {
+    const input = event.target;
+    if (input.matches("[data-instructions], [data-preset-name]")) {
+      capturePreset();
+      const option = [...presetSelect.options].find((item) => item.value === activePresetId);
+      if (option)
+        option.textContent = presetName.value.trim() || "Unnamed preset";
+      controls();
+    } else if (input.matches("[data-label]"))
+      updatePreview();
+  });
+  renderPresets();
   await refresh();
   return () => {
     disposed = true;
