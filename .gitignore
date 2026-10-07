@@ -1,0 +1,4 @@
+node_modules/
+*.log
+relatorio-mapeamento-threadverse-tt-st.txt
+# index.js is the installable browser bundle; keep it with the extension.

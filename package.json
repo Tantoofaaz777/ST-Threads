@@ -1,0 +1,16 @@
+{
+  "name": "st-threads",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "build": "bun build src/index.ts --outfile index.js --target browser --format esm",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "6.0.2",
+    "happy-dom": "^20.0.0"
+  }
+}

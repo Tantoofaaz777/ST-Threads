@@ -1,0 +1,14 @@
+{
+  "display_name": "ST Threads",
+  "author": "Tantoofaaz777",
+  "version": "0.1.0",
+  "homePage": "https://github.com/Tantoofaaz777/ST-Threads",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "dependencies": [],
+  "js": "index.js",
+  "css": "style.css",
+  "auto_update": false,
+  "hooks": { "disable": "onDisable", "enable": "onEnable" }
+}
