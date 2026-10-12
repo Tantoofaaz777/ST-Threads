@@ -154,7 +154,7 @@ test('repeated enable mounts once and disable removes the interface', async () =
   expect(document.querySelector('.sth-launcher')).toBeNull()
 })
 
-test('creates, edits and switches presets, then generates the previewed range and reloads the selection', async () => {
+test('creates, edits and switches presets, then generates the selected range and reloads the selection', async () => {
   const f = fixture()
   cleanup = await mountUi(f.host)
   button('[data-new-preset]').click()
@@ -168,18 +168,15 @@ test('creates, edits and switches presets, then generates the previewed range an
   input('[data-from]', '2'); input('[data-to]', '2')
   button('[data-range]').click()
   input('[data-label]', 'The reveal')
-  button('[data-preview]').click()
-  const preview = document.querySelector('[data-prompt]')!.textContent!
-  expect(preview).toContain('He was waiting.')
-  expect(preview).not.toContain('She opened the door.')
-  expect(preview).toContain('wild theories')
-  expect(preview).toContain('# OUTPUT FORMAT')
   let sent = ''
   f.host.generate = async (_profile, prompt) => { sent = prompt; return modelOutput }
   choose('[data-profile]', JSON.stringify(['profile', 'profile']))
   button('[data-generate]').click()
   await settle(() => document.querySelectorAll('.sth-feed').length === 1 && !button('[data-save-presets]').disabled)
-  expect(sent).toBe(preview)
+  expect(sent).toContain('He was waiting.')
+  expect(sent).not.toContain('She opened the door.')
+  expect(sent).toContain('wild theories')
+  expect(sent).toContain('# OUTPUT FORMAT')
   expect(f.writes.at(-1)!.chats['st:origin'].instructionPresetId).toBe(presetId)
   expect(document.querySelector('.sth-feed')!.textContent).toContain('Instructions used · Theory corner')
   cleanup(); cleanup = undefined

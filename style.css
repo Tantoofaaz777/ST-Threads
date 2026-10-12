@@ -61,7 +61,6 @@
 .sth-message strong { font-size: .85em; }
 .sth-message p { margin: 5px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9em; line-height: 1.5; max-height: 130px; overflow: auto; }
 .sth-dialog .sth-primary { background: #ad80ff24; border-color: var(--sth-accent); color: var(--sth-accent); font-weight: 600; }
-.sth-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: .8em; }
 .sth-author { font-size: .8em; color: var(--sth-accent); overflow-wrap: anywhere; }
 .sth-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; }
 .sth-comment { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--sth-border); }

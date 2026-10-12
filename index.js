@@ -921,6 +921,7 @@ async function mountUi(host) {
       <section data-panel="feeds"><p class="sth-hint">The latest 10 feeds are saved for each chat.</p><div data-feeds></div></section>
       <section data-panel="make" hidden>
         <div class="sth-card"><h3>Select a scene</h3>
+          <label class="sth-field" data-scene-title hidden>Scene title<input type="text" data-label maxlength="200" placeholder="Chapter, episode or scene"></label>
           <p>Select the messages the fandom will discuss. The feed stays separate from your roleplay.</p>
           <div class="sth-toolbar"><button type="button" data-refresh>Refresh</button>
             <button type="button" data-clear>Clear selection</button><span data-count>0 selected</span></div>
@@ -932,13 +933,9 @@ async function mountUi(host) {
           <button type="button" data-more hidden>Show earlier messages</button>
         </div>
         <div class="sth-card">
-          <label class="sth-field">Scene title<input type="text" data-label maxlength="200" placeholder="Chapter, episode or scene"></label>
           <p class="sth-hint">Choose your connection, samplers and instructions in Settings.</p>
           <div class="sth-toolbar"><button type="button" class="sth-primary" data-generate>Generate feed</button>
-            <button type="button" data-cancel hidden>Cancel generation</button>
-            <button type="button" data-preview>Preview prompt</button></div>
-          <details data-prompt-preview hidden><summary>Prompt sent to the model</summary><pre class="sth-output" data-prompt></pre></details>
-          <details><summary>Model response</summary><pre class="sth-output" data-output></pre></details>
+            <button type="button" data-cancel hidden>Cancel generation</button></div>
         </div>
       </section>
       <section data-panel="settings" hidden>
@@ -1008,7 +1005,6 @@ async function mountUi(host) {
     presetName.value = active.name;
     instructions.value = active.instructions;
     controls();
-    updatePreview();
   }
   function selectPreset(id) {
     if (!presetDraft.some((item) => item.id === id))
@@ -1054,17 +1050,6 @@ async function mountUi(host) {
     }
     status("Preset changes are kept in the panel. Save presets or generate a feed to save them.");
   }
-  function updatePreview(show = false) {
-    const preview = query("[data-prompt-preview]");
-    if (show) {
-      preview.hidden = false;
-      preview.open = true;
-    }
-    if (preview.hidden)
-      return;
-    const scene = (snapshot?.messages || []).filter((item) => selection.has(item.index));
-    query("[data-prompt]").textContent = scene.length ? scenePrompt(scene, sceneLabel.value, instructions.value) : "Select at least one message to preview the prompt.";
-  }
   function status(text, error = false) {
     if (disposed)
       return;
@@ -1108,7 +1093,7 @@ async function mountUi(host) {
     query("[data-preset-status]").hidden = !presetsDirty;
     profile.disabled = busy;
     query("[data-count]").textContent = `${selection.size} selected`;
-    updatePreview();
+    query("[data-scene-title]").hidden = selection.size === 0;
   }
   function profiles() {
     const previous = profile.value || targetValue({ kind: store.settings.generationTargetKind, id: store.settings.profileId });
@@ -1315,12 +1300,10 @@ ${message.content}`));
       await persistSettings(input, origin);
       if (disposed)
         return;
-      query("[data-output]").textContent = "";
       status("Generating discussion…");
       const result = generation.run(origin, indices, label, input, (text) => {
         if (disposed)
           return;
-        query("[data-output]").textContent = text;
         status(`Generating discussion… ${text.length.toLocaleString("en-US")} characters received.`);
       }, () => {
         status("Saving feed…");
@@ -1402,8 +1385,6 @@ ${message.content}`));
       editPreset("duplicate");
     else if (button.hasAttribute("data-delete-preset"))
       editPreset("delete");
-    else if (button.hasAttribute("data-preview"))
-      updatePreview(true);
     else if (button.hasAttribute("data-generate")) {
       generate();
     } else if (button.hasAttribute("data-cancel")) {
@@ -1467,8 +1448,7 @@ ${message.content}`));
       if (option)
         option.textContent = presetName.value.trim() || "Unnamed preset";
       controls();
-    } else if (input.matches("[data-label]"))
-      updatePreview();
+    }
   });
   renderPresets();
   await refresh();
