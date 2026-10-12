@@ -41,7 +41,7 @@ describe('saved TauriTavern models', () => {
       calls++
       expect(payload).toMatchObject({ type: 'quiet', stream: true, model: 'fandom-model', chat_completion_source: 'custom',
         custom_url: 'http://localhost:8000/v1', custom_api_format: 'claude_messages', secret_id: 'saved-credential',
-        max_tokens: 1234, temperature: 0.8, custom_claude_prompt_caching: true, custom_openai_responses_websocket: false,
+        max_tokens: 1234, temperature: 0.45, top_p: 0.9, custom_claude_prompt_caching: true, custom_openai_responses_websocket: false,
         messages: [{ role: 'user', content: 'My scene and instructions' }] })
       expect(payload).not.toHaveProperty('reverse_proxy')
       expect(options).toEqual({})
@@ -51,7 +51,8 @@ describe('saved TauriTavern models', () => {
     }
     const progress: string[] = []
     expect(await createHost(() => ctx, {}).generate({ kind: 'model', id: 'saved-model' },
-      'My scene and instructions', 1234, controller.signal, text => progress.push(text))).toBe('One two')
+      'My scene and instructions', 1234, controller.signal, text => progress.push(text),
+      { temperature: 0.45, topP: 0.9 })).toBe('One two')
     expect(progress).toEqual(['One', 'One two'])
     expect(calls).toBe(1)
     expect({ chat: ctx.chat, settings: ctx.extensionSettings, current: (ctx as any).chatCompletionSettings }).toEqual(before)

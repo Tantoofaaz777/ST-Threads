@@ -72,6 +72,27 @@ export async function mountUi(host: Host): Promise<() => void> {
         </div>
         <div class="sth-card">
           <label class="sth-field">Scene title<input type="text" data-label maxlength="200" placeholder="Chapter, episode or scene"></label>
+          <p class="sth-hint">Choose your connection, samplers and instructions in Settings.</p>
+          <div class="sth-toolbar"><button type="button" class="sth-primary" data-generate>Generate feed</button>
+            <button type="button" data-cancel hidden>Cancel generation</button>
+            <button type="button" data-preview>Preview prompt</button></div>
+          <details data-prompt-preview hidden><summary>Prompt sent to the model</summary><pre class="sth-output" data-prompt></pre></details>
+          <details><summary>Model response</summary><pre class="sth-output" data-output></pre></details>
+        </div>
+      </section>
+      <section data-panel="settings" hidden>
+        <div class="sth-card"><h3>Connection</h3>
+          <label class="sth-field">Generation model<select data-profile><option value="">Choose a model or profile…</option></select></label>
+          <p class="sth-hint" data-profile-hint></p>
+        </div>
+        <div class="sth-card"><h3>Samplers</h3>
+          <div class="sth-samplers">
+            <label class="sth-field">Max output tokens<input type="number" data-tokens min="256" max="32768" step="1"></label>
+            <label class="sth-field">Temperature<input type="number" data-temperature min="0" max="2" step="0.01"></label>
+            <label class="sth-field">Top P<input type="number" data-top-p min="0" max="1" step="0.01"></label>
+          </div>
+        </div>
+        <div class="sth-card"><h3>Instructions</h3>
           <label class="sth-field">Instruction preset<select data-preset></select></label>
           <div class="sth-toolbar"><button type="button" data-new-preset>New preset</button>
             <button type="button" data-duplicate-preset>Duplicate</button>
@@ -82,20 +103,9 @@ export async function mountUi(host: Host): Promise<() => void> {
           </details>
           <p class="sth-hint">These instructions are sent with the selected messages. The feed JSON format is added automatically.</p>
           <div class="sth-toolbar"><button type="button" data-save-presets>Save presets</button><span class="sth-hint" data-preset-status></span></div>
-          <label class="sth-field">Generation model<select data-profile><option value="">Choose a model or profile…</option></select></label>
-          <p class="sth-hint" data-profile-hint></p>
-          <div class="sth-toolbar"><button type="button" class="sth-primary" data-generate>Generate feed</button>
-            <button type="button" data-cancel hidden>Cancel generation</button>
-            <button type="button" data-preview>Preview prompt</button></div>
-          <details data-prompt-preview hidden><summary>Prompt sent to the model</summary><pre class="sth-output" data-prompt></pre></details>
-          <details><summary>Model response</summary><pre class="sth-output" data-output></pre></details>
         </div>
+        <button type="button" class="sth-primary" data-save-settings>Save settings</button>
       </section>
-      <section data-panel="settings" hidden><div class="sth-card">
-        <label class="sth-field">Response token limit<input type="number" data-tokens min="256" max="32768" step="1"></label>
-        <p class="sth-hint">This first version discusses only the selected scene. Continuity between feeds and regex support will follow in future updates.</p>
-        <button type="button" data-save-settings>Save settings</button>
-      </div></section>
     </div>`
   document.body.append(dialog)
   function query<T extends HTMLElement>(selector: string): T {
@@ -111,8 +121,12 @@ export async function mountUi(host: Host): Promise<() => void> {
   const presetSelect = query<HTMLSelectElement>('[data-preset]')
   const presetName = query<HTMLInputElement>('[data-preset-name]')
   const tokens = query<HTMLInputElement>('[data-tokens]')
+  const temperature = query<HTMLInputElement>('[data-temperature]')
+  const topP = query<HTMLInputElement>('[data-top-p]')
   instructions.value = store.settings.instructions
   tokens.value = String(store.settings.maxTokens)
+  temperature.value = String(store.settings.temperature)
+  topP.value = String(store.settings.topP)
 
   function capturePreset(): void {
     const draft = presetDraft.find(item => item.id === activePresetId)!
@@ -190,7 +204,8 @@ export async function mountUi(host: Host): Promise<() => void> {
     capturePreset()
     const target = availableTargets.find(item => targetValue(item) === profile.value)
     return validateSettings({ profileId: target?.id || '', generationTargetKind: target?.kind || 'profile',
-      maxTokens: Number(tokens.value), instructions: instructions.value,
+      maxTokens: tokens.valueAsNumber, temperature: temperature.valueAsNumber, topP: topP.valueAsNumber,
+      instructions: instructions.value,
       instructionPresets: structuredClone(presetDraft), activeInstructionPresetId: activePresetId })
   }
   function controls(): void {
@@ -200,7 +215,7 @@ export async function mountUi(host: Host): Promise<() => void> {
     query<HTMLButtonElement>('[data-cancel]').disabled = generation.committing
     query<HTMLButtonElement>('[data-save-settings]').disabled = busy
     for (const input of dialog.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>(
-      '[data-preset], [data-preset-name], [data-instructions], [data-tokens], [data-save-presets], [data-new-preset], [data-duplicate-preset], [data-delete-preset]')) input.disabled = busy
+      '[data-preset], [data-preset-name], [data-instructions], [data-tokens], [data-temperature], [data-top-p], [data-save-presets], [data-new-preset], [data-duplicate-preset], [data-delete-preset]')) input.disabled = busy
     query<HTMLButtonElement>('[data-delete-preset]').disabled = busy || presetDraft.length <= 1
     query<HTMLButtonElement>('[data-new-preset]').disabled = busy || presetDraft.length >= MAX_INSTRUCTION_PRESETS
     query<HTMLButtonElement>('[data-duplicate-preset]').disabled = busy || presetDraft.length >= MAX_INSTRUCTION_PRESETS
@@ -236,8 +251,8 @@ export async function mountUi(host: Host): Promise<() => void> {
   function targetHint(): void {
     const target = availableTargets.find(item => targetValue(item) === profile.value)
     query('[data-profile-hint]').textContent = target?.kind === 'model'
-      ? 'Uses the saved model connection and your feed instructions. Temperature: 0.8; no roleplay generation preset is applied.'
-      : target?.kind === 'profile' ? 'Uses the profile and its generation settings without changing your roleplay connection.'
+      ? 'Uses the saved model connection with your samplers and instructions.'
+      : target?.kind === 'profile' ? 'Uses the connection profile with your samplers and instructions.'
       : availableTargets.length ? 'Choose a saved model or connection profile for this feed.'
       : 'Save a Chat Completion model or connection profile in Connection Manager, then refresh this panel.'
   }

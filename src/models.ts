@@ -1,4 +1,5 @@
-import type { HostContext, ProxyPreset, SavedModelTarget } from './types'
+import type { HostContext, ProxyPreset, Samplers, SavedModelTarget } from './types'
+import { DEFAULT_SAMPLERS } from './store'
 
 const FORMATS: Record<string, string> = {
   custom_openai_responses: 'openai_responses', custom_claude_messages: 'claude_messages',
@@ -53,13 +54,15 @@ export async function readHostProxyPresets(): Promise<ProxyPreset[]> {
 }
 
 export async function savedModelPayload(target: SavedModelTarget, context: HostContext, prompt: string,
-  maxTokens: number, signal: AbortSignal, readProxies: () => Promise<ProxyPreset[]>): Promise<Record<string, unknown>> {
+  maxTokens: number, signal: AbortSignal, readProxies: () => Promise<ProxyPreset[]>,
+  samplers: Samplers = DEFAULT_SAMPLERS): Promise<Record<string, unknown>> {
   signal.throwIfAborted()
   const source = modelSource(target, context)
   if (!source) throw new Error('This saved model does not use a supported Chat Completion provider.')
   const payload: Record<string, unknown> = {
     type: 'quiet', stream: true, messages: [{ role: 'user', content: prompt }],
-    model: target.model.trim(), chat_completion_source: source, max_tokens: maxTokens, temperature: 0.8,
+    model: target.model.trim(), chat_completion_source: source, max_tokens: maxTokens,
+    temperature: samplers.temperature, top_p: samplers.topP,
   }
   const format = target['custom-api-format']?.trim() || FORMATS[target.api.trim().toLowerCase()] || 'openai_compat'
   if (source === 'custom') {

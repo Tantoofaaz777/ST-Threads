@@ -1,5 +1,5 @@
 import { parseThreadverseFeed } from './core/feed'
-import type { Host, InstructionPreset, SavedFeed, Settings, Store } from './types'
+import type { Host, InstructionPreset, Samplers, SavedFeed, Settings, Store } from './types'
 
 export const DEFAULT_INSTRUCTIONS = `You are simulating an online fandom discussing a fictional story as an ongoing television series or serialized fanfiction.
 Discuss the selected scene as an audience. Do not continue or rewrite the story.
@@ -8,6 +8,7 @@ Write the discussion in English. Create 3 to 5 separate conversations, each with
 const LEGACY_DEFAULT_INSTRUCTIONS = DEFAULT_INSTRUCTIONS.replace('in English.', 'in Brazilian Portuguese.')
 export const MAX_FEEDS_PER_CHAT = 10
 export const MAX_INSTRUCTION_PRESETS = 50
+export const DEFAULT_SAMPLERS: Readonly<Samplers> = { temperature: 0.8, topP: 1 }
 
 function migrateInstructions(text: string): string {
   return text.replace(/\r\n/g, '\n') === LEGACY_DEFAULT_INSTRUCTIONS ? DEFAULT_INSTRUCTIONS : text
@@ -38,6 +39,10 @@ export function normalizeSettings(value: unknown): Settings {
     generationTargetKind: item.generationTargetKind === 'model' ? 'model' : 'profile',
     maxTokens: typeof item.maxTokens === 'number' && Number.isInteger(item.maxTokens)
       && item.maxTokens >= 256 && item.maxTokens <= 32768 ? item.maxTokens : 4096,
+    temperature: typeof item.temperature === 'number' && Number.isFinite(item.temperature)
+      && item.temperature >= 0 && item.temperature <= 2 ? item.temperature : DEFAULT_SAMPLERS.temperature,
+    topP: typeof item.topP === 'number' && Number.isFinite(item.topP)
+      && item.topP >= 0 && item.topP <= 1 ? item.topP : DEFAULT_SAMPLERS.topP,
     instructionPresets: presets,
     activeInstructionPresetId: active.id,
     instructions: active.instructions,
@@ -47,6 +52,12 @@ export function normalizeSettings(value: unknown): Settings {
 export function validateSettings(input: Settings): Settings {
   if (!Number.isInteger(input.maxTokens) || input.maxTokens < 256 || input.maxTokens > 32768) {
     throw new Error('The token limit must be an integer between 256 and 32768.')
+  }
+  if (!Number.isFinite(input.temperature) || input.temperature < 0 || input.temperature > 2) {
+    throw new Error('Temperature must be a number between 0 and 2.')
+  }
+  if (!Number.isFinite(input.topP) || input.topP < 0 || input.topP > 1) {
+    throw new Error('Top P must be a number between 0 and 1.')
   }
   if (!input.instructionPresets.length || input.instructionPresets.length > MAX_INSTRUCTION_PRESETS) {
     throw new Error(`Keep between 1 and ${MAX_INSTRUCTION_PRESETS} instruction presets.`)

@@ -19,7 +19,11 @@ export interface GenerationTarget extends GenerationTargetRef {
   name: string
   model: string
 }
-export interface Settings {
+export interface Samplers {
+  temperature: number
+  topP: number
+}
+export interface Settings extends Samplers {
   profileId: string
   generationTargetKind: GenerationTargetRef['kind']
   maxTokens: number
@@ -51,7 +55,7 @@ export interface Host {
   readStore(): Promise<unknown>
   writeStore(store: Store): Promise<void>
   generate(target: GenerationTargetRef, prompt: string, maxTokens: number, signal: AbortSignal,
-    progress: (text: string) => void): Promise<string>
+    progress: (text: string) => void, samplers?: Samplers): Promise<string>
   subscribe(handler: () => void): () => void
 }
 
@@ -97,7 +101,8 @@ export interface HostContext {
   ConnectionManagerRequestService?: {
     getSupportedProfiles(): ConnectionProfile[]
     sendRequest(id: string, messages: Array<{ role: string; content: string }>, maxTokens: number,
-      options: { stream: boolean; signal: AbortSignal; extractData: boolean; includePreset: boolean }):
+      options: { stream: boolean; signal: AbortSignal; extractData: boolean; includePreset: boolean },
+      overridePayload?: Record<string, unknown>):
       Promise<GenerationResponse>
   }
   ChatCompletionService?: {

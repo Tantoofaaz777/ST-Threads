@@ -53,12 +53,13 @@ test('mounts the launcher, selects messages, generates a feed and cleans up the 
   cleanup = await mountUi(f.host)
   expect(document.querySelectorAll('.sth-launcher')).toHaveLength(1)
   button('.sth-launcher button').click()
-  button('[data-tab="make"]').click()
-  const selected = document.querySelector<HTMLInputElement>('[data-index="0"]')!
-  selected.click()
+  button('[data-tab="settings"]').click()
   const profile = document.querySelector<HTMLSelectElement>('[data-profile]')!
   profile.value = JSON.stringify(['profile', 'profile'])
   profile.dispatchEvent(new browser.Event('change', { bubbles: true }) as any)
+  button('[data-tab="make"]').click()
+  const selected = document.querySelector<HTMLInputElement>('[data-index="0"]')!
+  selected.click()
   expect(button('[data-generate]').disabled).toBe(false)
   button('[data-generate]').click()
   await settle(() => document.querySelectorAll('.sth-feed').length > 0)
@@ -68,6 +69,37 @@ test('mounts the launcher, selects messages, generates a feed and cleans up the 
   cleanup(); cleanup = undefined
   expect(document.querySelector('.sth-dialog')).toBeNull()
   expect(document.querySelector('.sth-launcher')).toBeNull()
+})
+
+test('saves samplers in Settings, restores them on reopen and sends them when generating in Make', async () => {
+  const f = fixture()
+  cleanup = await mountUi(f.host)
+  button('[data-tab="settings"]').click()
+  choose('[data-profile]', JSON.stringify(['profile', 'profile']))
+  input('[data-tokens]', '2048')
+  input('[data-temperature]', '')
+  input('[data-top-p]', '0.9')
+  button('[data-save-settings]').click()
+  expect(f.writes).toHaveLength(0)
+  expect(document.querySelector('[data-status]')!.textContent).toContain('Temperature')
+  input('[data-temperature]', '0.45')
+  button('[data-save-settings]').click()
+  await settle(() => !button('[data-save-settings]').disabled && f.writes.length === 1)
+  cleanup(); cleanup = undefined
+  cleanup = await mountUi(f.host)
+  expect(document.querySelector<HTMLInputElement>('[data-tokens]')!.value).toBe('2048')
+  expect(document.querySelector<HTMLInputElement>('[data-temperature]')!.value).toBe('0.45')
+  expect(document.querySelector<HTMLInputElement>('[data-top-p]')!.value).toBe('0.9')
+  let request: unknown
+  f.host.generate = async (_target, _prompt, maxTokens, _signal, _progress, samplers) => {
+    request = { maxTokens, ...samplers }
+    return modelOutput
+  }
+  button('[data-tab="make"]').click()
+  document.querySelector<HTMLInputElement>('[data-index="0"]')!.click()
+  button('[data-generate]').click()
+  await settle(() => document.querySelectorAll('.sth-feed').length === 1)
+  expect(request).toEqual({ maxTokens: 2048, temperature: 0.45, topP: 0.9 })
 })
 
 test('chat and model HTML is displayed as text without executing markup', async () => {

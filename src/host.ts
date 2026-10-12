@@ -1,5 +1,6 @@
 import type { ChatSnapshot, GenerationResponse, GenerationTarget, Host, HostContext, ProxyPreset, Store, TTHost } from './types'
 import { readHostProxyPresets, savedModelPayload, savedModels } from './models'
+import { DEFAULT_SAMPLERS } from './store'
 
 const NAMESPACE = 'st_threads'
 
@@ -61,7 +62,7 @@ export function createHost(getContext: () => HostContext, tt?: TTHost,
         context.saveSettingsDebounced()
       }
     },
-    async generate(target, prompt, maxTokens, signal, progress): Promise<string> {
+    async generate(target, prompt, maxTokens, signal, progress, samplers = DEFAULT_SAMPLERS): Promise<string> {
       const context = getContext()
       signal.throwIfAborted()
       if (!this.listGenerationTargets().some(item => item.id === target.id && item.kind === target.kind)) {
@@ -70,13 +71,14 @@ export function createHost(getContext: () => HostContext, tt?: TTHost,
       let output: GenerationResponse
       if (target.kind === 'model') {
         const model = savedModels(context).find(item => item.id === target.id)!
-        const payload = await savedModelPayload(model, context, prompt, maxTokens, signal, readProxies)
+        const payload = await savedModelPayload(model, context, prompt, maxTokens, signal, readProxies, samplers)
         signal.throwIfAborted()
         output = await context.ChatCompletionService!.processRequest(payload, {}, true, signal)
       } else {
         output = await context.ConnectionManagerRequestService!.sendRequest(target.id,
           [{ role: 'user', content: prompt }], maxTokens,
-          { stream: true, signal, extractData: true, includePreset: true })
+          { stream: true, signal, extractData: true, includePreset: true },
+          { temperature: samplers.temperature, top_p: samplers.topP })
       }
       let text = ''
       if (typeof output === 'function') {

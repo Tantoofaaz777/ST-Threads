@@ -51,7 +51,7 @@ export class Generation {
       // Own the scene and settings before awaiting the network, even if the UI changes chat.
       const prompt = scenePrompt(scene, label, input.instructions)
       const output = await this.host.generate({ kind: input.generationTargetKind, id: input.profileId }, prompt, input.maxTokens,
-        controller.signal, progress)
+        controller.signal, progress, { temperature: input.temperature, topP: input.topP })
       controller.signal.throwIfAborted()
       const feed = parseGeneratedThreadverseFeed(output)
       const saved: SavedFeed = { id: crypto.randomUUID(), createdAt: new Date().toISOString(),

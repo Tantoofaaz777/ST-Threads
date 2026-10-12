@@ -94,6 +94,8 @@ describe('persistence and parsing', () => {
     expect(state.settings.instructionPresets).toEqual([{ id: 'default', name: 'Default',
       instructions: 'Keep my custom prompt verbatim.\nSecond line.' }])
     expect(state.settings.profileId).toBe('profile')
+    expect(state.settings.temperature).toBe(0.8)
+    expect(state.settings.topP).toBe(1)
     expect(state.chats[chat.key].feeds).toEqual([oldFeed])
   })
   test('uses the active preset instead of stale single-prompt settings and rejects invalid drafts', () => {
@@ -181,9 +183,16 @@ describe('ST/TT host adapter', () => {
   test('cumulative streaming does not duplicate text or change the chat or connection', async () => {
     const ctx = context()
     const before = structuredClone(ctx.chat)
+    const sendRequest = ctx.ConnectionManagerRequestService!.sendRequest
+    ctx.ConnectionManagerRequestService!.sendRequest = async (...args) => {
+      expect(args[2]).toBe(1000)
+      expect(args[4]).toEqual({ temperature: 0.45, top_p: 0.9 })
+      return sendRequest(...args)
+    }
     const host = createHost(() => ctx)
     const progress: string[] = []
-    expect(await host.generate({ kind: 'profile', id: 'chat-profile' }, 'Prompt', 1000, new AbortController().signal, text => progress.push(text))).toBe('Hello world')
+    expect(await host.generate({ kind: 'profile', id: 'chat-profile' }, 'Prompt', 1000,
+      new AbortController().signal, text => progress.push(text), { temperature: 0.45, topP: 0.9 })).toBe('Hello world')
     expect(progress).toEqual(['Hello', 'Hello world'])
     expect(ctx.chat).toEqual(before)
     expect(ctx.extensionSettings.connectionManager).toBeUndefined()

@@ -1,278 +1,3 @@
-// src/models.ts
-var FORMATS = {
-  custom_openai_responses: "openai_responses",
-  custom_claude_messages: "claude_messages",
-  custom_gemini_interactions: "gemini_interactions",
-  custom_gemini_generate_content: "gemini_generate_content"
-};
-var ALIASES = {
-  oai: "openai",
-  "open-router": "openrouter",
-  google: "makersuite",
-  gemini: "makersuite",
-  "vertex-ai": "vertexai",
-  "vertex ai": "vertexai",
-  "nano-gpt": "nanogpt",
-  "nano gpt": "nanogpt",
-  "silicon flow": "siliconflow",
-  "workers-ai": "workers_ai",
-  "workers ai": "workers_ai",
-  "cloudflare workers ai": "workers_ai",
-  "z.ai": "zai",
-  glm: "zai",
-  "mini-max": "minimax",
-  "mini max": "minimax",
-  "moonshot ai": "moonshot",
-  "aws-bedrock": "aws_bedrock",
-  "aws bedrock": "aws_bedrock",
-  bedrock: "aws_bedrock",
-  "x.ai": "xai",
-  grok: "xai"
-};
-var SECRET_KEYS = Object.fromEntries([
-  "openai",
-  "opencode",
-  "openrouter",
-  "custom",
-  "claude",
-  "makersuite",
-  "vertexai",
-  "deepseek",
-  "cohere",
-  "groq",
-  "moonshot",
-  "nanogpt",
-  "chutes",
-  "siliconflow",
-  "workers_ai",
-  "zai",
-  "minimax",
-  "aws_bedrock",
-  "xai",
-  "pollinations"
-].map((source) => [source, `api_key_${source}`]));
-var ENDPOINT_FIELDS = {
-  opencode: "opencode_endpoint",
-  vertexai: "vertexai_region",
-  zai: "zai_endpoint",
-  siliconflow: "siliconflow_endpoint",
-  minimax: "minimax_endpoint",
-  moonshot: "moonshot_endpoint",
-  pollinations: "pollinations_endpoint"
-};
-var PROXY_SOURCES = new Set(["custom", "openai", "claude", "makersuite", "vertexai", "deepseek", "moonshot", "zai", "xai"]);
-function modelSource(target, context) {
-  const api = target.api.trim().toLowerCase();
-  const mapping = context.CONNECT_API_MAP?.[api];
-  if (mapping && mapping.selected !== "openai")
-    return "";
-  const source = mapping?.source || (FORMATS[api] ? "custom" : ALIASES[api] || api);
-  return Object.hasOwn(SECRET_KEYS, source) ? source : "";
-}
-function savedModels(context) {
-  const targets = context.extensionSettings.connectionManager?.modelTargets;
-  if (!Array.isArray(targets))
-    return [];
-  return targets.filter((target) => target?.kind === "tauritavern.modelTarget" && target.mode === "cc" && typeof target.id === "string" && target.id.trim() && typeof target.api === "string" && target.api.trim() && typeof target.model === "string" && target.model.trim() && modelSource(target, context)).map((target) => structuredClone(target)).sort((a, b) => (a.name || a.model).localeCompare(b.name || b.model, "en-US"));
-}
-async function readHostProxyPresets() {
-  const hostModuleUrl = "/scripts/openai.js";
-  const module = await import(hostModuleUrl);
-  if (!Array.isArray(module.proxies))
-    throw new Error("Saved reverse proxy presets are unavailable.");
-  return structuredClone(module.proxies);
-}
-async function savedModelPayload(target, context, prompt, maxTokens, signal, readProxies) {
-  signal.throwIfAborted();
-  const source = modelSource(target, context);
-  if (!source)
-    throw new Error("This saved model does not use a supported Chat Completion provider.");
-  const payload = {
-    type: "quiet",
-    stream: true,
-    messages: [{ role: "user", content: prompt }],
-    model: target.model.trim(),
-    chat_completion_source: source,
-    max_tokens: maxTokens,
-    temperature: 0.8
-  };
-  const format = target["custom-api-format"]?.trim() || FORMATS[target.api.trim().toLowerCase()] || "openai_compat";
-  if (source === "custom") {
-    payload.custom_api_format = format;
-    payload.custom_claude_prompt_caching = target.adapterHints?.claudePromptCaching === "enabled";
-    payload.custom_openai_responses_websocket = target.adapterHints?.openaiResponsesMode === "websocket";
-  } else if (source === "opencode")
-    payload.opencode_api_format = target["custom-api-format"]?.trim() || "openai_compat";
-  const endpoint = target["api-url"]?.trim() || "";
-  if (ENDPOINT_FIELDS[source] && endpoint)
-    payload[ENDPOINT_FIELDS[source]] = endpoint;
-  if (source === "custom")
-    payload.custom_url = endpoint;
-  if (source === "vertexai")
-    payload.vertexai_auth_mode = target.secretRef?.key === "vertexai_service_account_json" ? "full" : "express";
-  const proxyName = target.proxy?.trim();
-  if (proxyName && proxyName !== "None") {
-    if (!PROXY_SOURCES.has(source))
-      throw new Error(`Saved reverse proxies are not supported for ${source}. Update the saved model.`);
-    const proxies = await readProxies();
-    signal.throwIfAborted();
-    const proxy = proxies.find((item) => item.name === proxyName);
-    if (!proxy?.url?.trim())
-      throw new Error(`The saved reverse proxy "${proxyName}" is missing. Update the saved model.`);
-    payload.reverse_proxy = proxy.url.trim();
-    payload.proxy_password = proxy.password || "";
-    if (source === "custom")
-      payload.custom_url = "";
-  } else if (target.secretRef) {
-    const expected = source === "vertexai" && payload.vertexai_auth_mode === "full" ? "vertexai_service_account_json" : SECRET_KEYS[source];
-    if (target.secretRef.key !== expected || !target.secretRef.id?.trim()) {
-      throw new Error("The saved model credential reference does not match its provider. Update the saved model in Connection Manager.");
-    }
-    payload.secret_id = target.secretRef.id.trim();
-  } else if (source === "custom" && endpoint) {
-    payload.custom_url = "";
-    payload.reverse_proxy = endpoint;
-    payload.proxy_password = "";
-  } else if (!(source === "pollinations" && endpoint === "anonymous")) {
-    throw new Error("This saved model has no credential reference. Update it in Connection Manager before generating.");
-  }
-  if (source === "custom" && !payload.custom_url && !payload.reverse_proxy) {
-    throw new Error("The saved model has no endpoint. Update it in Connection Manager.");
-  }
-  signal.throwIfAborted();
-  return payload;
-}
-
-// src/host.ts
-var NAMESPACE = "st_threads";
-function liveKey(context) {
-  if (!context.chatId)
-    return null;
-  if (context.groupId)
-    return JSON.stringify(["group", context.groupId, context.chatId]);
-  const character = context.characters?.[context.characterId ?? -1];
-  if (!character?.avatar)
-    return null;
-  return JSON.stringify(["character", character.avatar, context.chatMetadata?.integrity || context.chatId]);
-}
-function createHost(getContext, tt, readProxies = readHostProxyPresets) {
-  const storage = tt?.api?.extension?.store;
-  return {
-    async readChat() {
-      const context = getContext();
-      const identity = liveKey(context);
-      if (!identity)
-        return null;
-      const group = context.groups?.find((item) => item.id === context.groupId);
-      const character = context.characters?.[context.characterId ?? -1];
-      const messages = context.chat.flatMap((item, index) => {
-        if (!item || item.is_system || typeof item.mes !== "string" || !item.mes.trim())
-          return [];
-        return [{
-          index,
-          name: item.name || (item.is_user ? "You" : "Character"),
-          role: item.is_user ? "user" : "assistant",
-          content: item.mes
-        }];
-      });
-      const stable = tt?.api?.chat ? await tt.api.chat.current.handle().stableId() : identity;
-      if (liveKey(getContext()) !== identity)
-        throw new Error("The chat changed while loading. Refresh the list.");
-      return {
-        key: `${tt ? "tt" : "st"}:${context.groupId ? "group" : "character"}:${stable}`,
-        name: `${group?.name || character?.name || "Chat"} · ${context.chatId}`,
-        messages
-      };
-    },
-    listGenerationTargets() {
-      const context = getContext();
-      const service = context.ConnectionManagerRequestService;
-      if (context.extensionSettings.disabledExtensions?.includes("connection-manager")) {
-        throw new Error("Enable Connection Manager to choose a saved model or connection profile.");
-      }
-      const models = tt && context.ChatCompletionService ? savedModels(context).map((item) => ({ kind: "model", id: item.id, name: item.name || item.model, model: item.model })) : [];
-      const profiles = (service?.getSupportedProfiles() || []).filter((item) => item.api && context.CONNECT_API_MAP?.[item.api]?.selected === "openai").map((item) => ({ kind: "profile", id: item.id, name: item.name || item.id, model: item.model || "" }));
-      return [...models, ...profiles];
-    },
-    async readStore() {
-      if (storage) {
-        const result = await storage.tryGetJson({ namespace: NAMESPACE, key: "state" });
-        return result.found ? result.value : undefined;
-      }
-      return structuredClone(getContext().extensionSettings[NAMESPACE]);
-    },
-    async writeStore(store) {
-      if (storage) {
-        await storage.setJson({ namespace: NAMESPACE, key: "state", value: store });
-      } else {
-        const context = getContext();
-        context.extensionSettings[NAMESPACE] = structuredClone(store);
-        context.saveSettingsDebounced();
-      }
-    },
-    async generate(target, prompt, maxTokens, signal, progress) {
-      const context = getContext();
-      signal.throwIfAborted();
-      if (!this.listGenerationTargets().some((item) => item.id === target.id && item.kind === target.kind)) {
-        throw new Error("Select an available saved model or Chat Completion profile, then refresh this panel.");
-      }
-      let output;
-      if (target.kind === "model") {
-        const model = savedModels(context).find((item) => item.id === target.id);
-        const payload = await savedModelPayload(model, context, prompt, maxTokens, signal, readProxies);
-        signal.throwIfAborted();
-        output = await context.ChatCompletionService.processRequest(payload, {}, true, signal);
-      } else {
-        output = await context.ConnectionManagerRequestService.sendRequest(target.id, [{ role: "user", content: prompt }], maxTokens, { stream: true, signal, extractData: true, includePreset: true });
-      }
-      let text = "";
-      if (typeof output === "function") {
-        for await (const chunk of output()) {
-          signal.throwIfAborted();
-          if (typeof chunk.text === "string") {
-            text = chunk.text;
-            progress(text);
-          }
-        }
-      } else if (typeof output?.content === "string") {
-        text = output.content;
-        progress(text);
-      }
-      signal.throwIfAborted();
-      if (!text.trim())
-        throw new Error("The model returned an empty response.");
-      return text;
-    },
-    subscribe(handler) {
-      const context = getContext();
-      const names = [
-        "CHAT_CHANGED",
-        "CHAT_RENAMED",
-        "CHAT_DELETED",
-        "GROUP_CHAT_DELETED",
-        "MESSAGE_SENT",
-        "MESSAGE_RECEIVED",
-        "MESSAGE_EDITED",
-        "MESSAGE_DELETED",
-        "MESSAGE_SWIPED",
-        "MODEL_TARGET_CREATED",
-        "MODEL_TARGET_UPDATED",
-        "MODEL_TARGET_DELETED",
-        "CONNECTION_PROFILE_CREATED",
-        "CONNECTION_PROFILE_UPDATED",
-        "CONNECTION_PROFILE_DELETED"
-      ];
-      const events = [...new Set(names.map((name) => context.eventTypes[name]).filter(Boolean))];
-      for (const event of events)
-        context.eventSource.on(event, handler);
-      return () => {
-        for (const event of events)
-          context.eventSource.removeListener(event, handler);
-      };
-    }
-  };
-}
-
 // src/core/feed.ts
 function asObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -555,59 +280,6 @@ ${feed.post.body}`,
 `);
 }
 
-// src/core/prompt.ts
-function renderBlocks(items) {
-  if (items.length === 0)
-    return "";
-  return items.map((item) => `## ${item.label}
-${item.content.trim()}`).join(`
-
-`);
-}
-function buildThreadversePrompt(input) {
-  const fandomNotes = input.fandomNotes?.trim() ?? "";
-  return [
-    ...input.previousRanges.length > 0 ? ["# PREVIOUS CONTEXT", renderBlocks(input.previousRanges)] : [],
-    "# RECENT CONTEXT",
-    renderBlocks([input.recentRange]),
-    ...input.fandomContinuity.length > 0 ? ["# FANDOM CONTINUITY", renderBlocks(input.fandomContinuity)] : [],
-    ...fandomNotes ? ["# FANDOM NOTES", fandomNotes] : [],
-    "# INSTRUCTIONS",
-    input.instructions.trim(),
-    "# OUTPUT FORMAT",
-    `You must respond with ONLY valid JSON in this exact format:
-{
-  "title": "thread title",
-  "post": { "username": "name", "body": "text", "score": 0 },
-  "conversations": [
-    {
-      "root": { "id": "c1", "username": "root_a", "body": "independent top-level comment", "score": 120 },
-      "replies": [
-        { "id": "c1-r1", "parent_id": "c1", "username": "reply_a", "body": "direct reply to root_a", "score": 45 },
-        { "id": "c1-r2", "parent_id": "c1-r1", "username": "root_a", "body": "nested reply to reply_a", "score": 31 }
-      ]
-    },
-    {
-      "root": { "id": "c2", "username": "root_b", "body": "another independent top-level comment", "score": 90 },
-      "replies": [
-        { "id": "c2-r1", "parent_id": "c2", "username": "reply_b", "body": "direct reply to root_b", "score": 28 }
-      ]
-    },
-    {
-      "root": { "id": "c3", "username": "root_c", "body": "another independent top-level comment", "score": 70 },
-      "replies": [
-        { "id": "c3-r1", "parent_id": "c3", "username": "reply_c", "body": "direct reply to root_c", "score": 19 }
-      ]
-    }
-  ]
-}
-The example demonstrates structure only; scale the number of conversations and replies to the requested discussion size. Each item in conversations is one separate top-level Reddit conversation and contains exactly one root. Every reply must use parent_id equal to that conversation's root id or to the id of an earlier reply inside the SAME conversation. Never move a root into replies and never reference another conversation. At least 35% of all comments must be replies. With 6 or more comments, create at least 3 separate top-level conversations and give each of at least 3 conversations one or more replies. Do not put the entire discussion beneath one root.
-Return ONLY the JSON—no explanations, no notes, no commentary.`
-  ].join(`
-
-`);
-}
-
 // src/store.ts
 var DEFAULT_INSTRUCTIONS = `You are simulating an online fandom discussing a fictional story as an ongoing television series or serialized fanfiction.
 Discuss the selected scene as an audience. Do not continue or rewrite the story.
@@ -616,6 +288,7 @@ Write the discussion in English. Create 3 to 5 separate conversations, each with
 var LEGACY_DEFAULT_INSTRUCTIONS = DEFAULT_INSTRUCTIONS.replace("in English.", "in Brazilian Portuguese.");
 var MAX_FEEDS_PER_CHAT = 10;
 var MAX_INSTRUCTION_PRESETS = 50;
+var DEFAULT_SAMPLERS = { temperature: 0.8, topP: 1 };
 function migrateInstructions(text) {
   return text.replace(/\r\n/g, `
 `) === LEGACY_DEFAULT_INSTRUCTIONS ? DEFAULT_INSTRUCTIONS : text;
@@ -645,6 +318,8 @@ function normalizeSettings(value) {
     profileId: typeof item.profileId === "string" ? item.profileId : "",
     generationTargetKind: item.generationTargetKind === "model" ? "model" : "profile",
     maxTokens: typeof item.maxTokens === "number" && Number.isInteger(item.maxTokens) && item.maxTokens >= 256 && item.maxTokens <= 32768 ? item.maxTokens : 4096,
+    temperature: typeof item.temperature === "number" && Number.isFinite(item.temperature) && item.temperature >= 0 && item.temperature <= 2 ? item.temperature : DEFAULT_SAMPLERS.temperature,
+    topP: typeof item.topP === "number" && Number.isFinite(item.topP) && item.topP >= 0 && item.topP <= 1 ? item.topP : DEFAULT_SAMPLERS.topP,
     instructionPresets: presets,
     activeInstructionPresetId: active.id,
     instructions: active.instructions
@@ -653,6 +328,12 @@ function normalizeSettings(value) {
 function validateSettings(input) {
   if (!Number.isInteger(input.maxTokens) || input.maxTokens < 256 || input.maxTokens > 32768) {
     throw new Error("The token limit must be an integer between 256 and 32768.");
+  }
+  if (!Number.isFinite(input.temperature) || input.temperature < 0 || input.temperature > 2) {
+    throw new Error("Temperature must be a number between 0 and 2.");
+  }
+  if (!Number.isFinite(input.topP) || input.topP < 0 || input.topP > 1) {
+    throw new Error("Top P must be a number between 0 and 1.");
   }
   if (!input.instructionPresets.length || input.instructionPresets.length > MAX_INSTRUCTION_PRESETS) {
     throw new Error(`Keep between 1 and ${MAX_INSTRUCTION_PRESETS} instruction presets.`);
@@ -741,6 +422,335 @@ class Repository {
   }
 }
 
+// src/models.ts
+var FORMATS = {
+  custom_openai_responses: "openai_responses",
+  custom_claude_messages: "claude_messages",
+  custom_gemini_interactions: "gemini_interactions",
+  custom_gemini_generate_content: "gemini_generate_content"
+};
+var ALIASES = {
+  oai: "openai",
+  "open-router": "openrouter",
+  google: "makersuite",
+  gemini: "makersuite",
+  "vertex-ai": "vertexai",
+  "vertex ai": "vertexai",
+  "nano-gpt": "nanogpt",
+  "nano gpt": "nanogpt",
+  "silicon flow": "siliconflow",
+  "workers-ai": "workers_ai",
+  "workers ai": "workers_ai",
+  "cloudflare workers ai": "workers_ai",
+  "z.ai": "zai",
+  glm: "zai",
+  "mini-max": "minimax",
+  "mini max": "minimax",
+  "moonshot ai": "moonshot",
+  "aws-bedrock": "aws_bedrock",
+  "aws bedrock": "aws_bedrock",
+  bedrock: "aws_bedrock",
+  "x.ai": "xai",
+  grok: "xai"
+};
+var SECRET_KEYS = Object.fromEntries([
+  "openai",
+  "opencode",
+  "openrouter",
+  "custom",
+  "claude",
+  "makersuite",
+  "vertexai",
+  "deepseek",
+  "cohere",
+  "groq",
+  "moonshot",
+  "nanogpt",
+  "chutes",
+  "siliconflow",
+  "workers_ai",
+  "zai",
+  "minimax",
+  "aws_bedrock",
+  "xai",
+  "pollinations"
+].map((source) => [source, `api_key_${source}`]));
+var ENDPOINT_FIELDS = {
+  opencode: "opencode_endpoint",
+  vertexai: "vertexai_region",
+  zai: "zai_endpoint",
+  siliconflow: "siliconflow_endpoint",
+  minimax: "minimax_endpoint",
+  moonshot: "moonshot_endpoint",
+  pollinations: "pollinations_endpoint"
+};
+var PROXY_SOURCES = new Set(["custom", "openai", "claude", "makersuite", "vertexai", "deepseek", "moonshot", "zai", "xai"]);
+function modelSource(target, context) {
+  const api = target.api.trim().toLowerCase();
+  const mapping = context.CONNECT_API_MAP?.[api];
+  if (mapping && mapping.selected !== "openai")
+    return "";
+  const source = mapping?.source || (FORMATS[api] ? "custom" : ALIASES[api] || api);
+  return Object.hasOwn(SECRET_KEYS, source) ? source : "";
+}
+function savedModels(context) {
+  const targets = context.extensionSettings.connectionManager?.modelTargets;
+  if (!Array.isArray(targets))
+    return [];
+  return targets.filter((target) => target?.kind === "tauritavern.modelTarget" && target.mode === "cc" && typeof target.id === "string" && target.id.trim() && typeof target.api === "string" && target.api.trim() && typeof target.model === "string" && target.model.trim() && modelSource(target, context)).map((target) => structuredClone(target)).sort((a, b) => (a.name || a.model).localeCompare(b.name || b.model, "en-US"));
+}
+async function readHostProxyPresets() {
+  const hostModuleUrl = "/scripts/openai.js";
+  const module = await import(hostModuleUrl);
+  if (!Array.isArray(module.proxies))
+    throw new Error("Saved reverse proxy presets are unavailable.");
+  return structuredClone(module.proxies);
+}
+async function savedModelPayload(target, context, prompt, maxTokens, signal, readProxies, samplers = DEFAULT_SAMPLERS) {
+  signal.throwIfAborted();
+  const source = modelSource(target, context);
+  if (!source)
+    throw new Error("This saved model does not use a supported Chat Completion provider.");
+  const payload = {
+    type: "quiet",
+    stream: true,
+    messages: [{ role: "user", content: prompt }],
+    model: target.model.trim(),
+    chat_completion_source: source,
+    max_tokens: maxTokens,
+    temperature: samplers.temperature,
+    top_p: samplers.topP
+  };
+  const format = target["custom-api-format"]?.trim() || FORMATS[target.api.trim().toLowerCase()] || "openai_compat";
+  if (source === "custom") {
+    payload.custom_api_format = format;
+    payload.custom_claude_prompt_caching = target.adapterHints?.claudePromptCaching === "enabled";
+    payload.custom_openai_responses_websocket = target.adapterHints?.openaiResponsesMode === "websocket";
+  } else if (source === "opencode")
+    payload.opencode_api_format = target["custom-api-format"]?.trim() || "openai_compat";
+  const endpoint = target["api-url"]?.trim() || "";
+  if (ENDPOINT_FIELDS[source] && endpoint)
+    payload[ENDPOINT_FIELDS[source]] = endpoint;
+  if (source === "custom")
+    payload.custom_url = endpoint;
+  if (source === "vertexai")
+    payload.vertexai_auth_mode = target.secretRef?.key === "vertexai_service_account_json" ? "full" : "express";
+  const proxyName = target.proxy?.trim();
+  if (proxyName && proxyName !== "None") {
+    if (!PROXY_SOURCES.has(source))
+      throw new Error(`Saved reverse proxies are not supported for ${source}. Update the saved model.`);
+    const proxies = await readProxies();
+    signal.throwIfAborted();
+    const proxy = proxies.find((item) => item.name === proxyName);
+    if (!proxy?.url?.trim())
+      throw new Error(`The saved reverse proxy "${proxyName}" is missing. Update the saved model.`);
+    payload.reverse_proxy = proxy.url.trim();
+    payload.proxy_password = proxy.password || "";
+    if (source === "custom")
+      payload.custom_url = "";
+  } else if (target.secretRef) {
+    const expected = source === "vertexai" && payload.vertexai_auth_mode === "full" ? "vertexai_service_account_json" : SECRET_KEYS[source];
+    if (target.secretRef.key !== expected || !target.secretRef.id?.trim()) {
+      throw new Error("The saved model credential reference does not match its provider. Update the saved model in Connection Manager.");
+    }
+    payload.secret_id = target.secretRef.id.trim();
+  } else if (source === "custom" && endpoint) {
+    payload.custom_url = "";
+    payload.reverse_proxy = endpoint;
+    payload.proxy_password = "";
+  } else if (!(source === "pollinations" && endpoint === "anonymous")) {
+    throw new Error("This saved model has no credential reference. Update it in Connection Manager before generating.");
+  }
+  if (source === "custom" && !payload.custom_url && !payload.reverse_proxy) {
+    throw new Error("The saved model has no endpoint. Update it in Connection Manager.");
+  }
+  signal.throwIfAborted();
+  return payload;
+}
+
+// src/host.ts
+var NAMESPACE = "st_threads";
+function liveKey(context) {
+  if (!context.chatId)
+    return null;
+  if (context.groupId)
+    return JSON.stringify(["group", context.groupId, context.chatId]);
+  const character = context.characters?.[context.characterId ?? -1];
+  if (!character?.avatar)
+    return null;
+  return JSON.stringify(["character", character.avatar, context.chatMetadata?.integrity || context.chatId]);
+}
+function createHost(getContext, tt, readProxies = readHostProxyPresets) {
+  const storage = tt?.api?.extension?.store;
+  return {
+    async readChat() {
+      const context = getContext();
+      const identity = liveKey(context);
+      if (!identity)
+        return null;
+      const group = context.groups?.find((item) => item.id === context.groupId);
+      const character = context.characters?.[context.characterId ?? -1];
+      const messages = context.chat.flatMap((item, index) => {
+        if (!item || item.is_system || typeof item.mes !== "string" || !item.mes.trim())
+          return [];
+        return [{
+          index,
+          name: item.name || (item.is_user ? "You" : "Character"),
+          role: item.is_user ? "user" : "assistant",
+          content: item.mes
+        }];
+      });
+      const stable = tt?.api?.chat ? await tt.api.chat.current.handle().stableId() : identity;
+      if (liveKey(getContext()) !== identity)
+        throw new Error("The chat changed while loading. Refresh the list.");
+      return {
+        key: `${tt ? "tt" : "st"}:${context.groupId ? "group" : "character"}:${stable}`,
+        name: `${group?.name || character?.name || "Chat"} · ${context.chatId}`,
+        messages
+      };
+    },
+    listGenerationTargets() {
+      const context = getContext();
+      const service = context.ConnectionManagerRequestService;
+      if (context.extensionSettings.disabledExtensions?.includes("connection-manager")) {
+        throw new Error("Enable Connection Manager to choose a saved model or connection profile.");
+      }
+      const models = tt && context.ChatCompletionService ? savedModels(context).map((item) => ({ kind: "model", id: item.id, name: item.name || item.model, model: item.model })) : [];
+      const profiles = (service?.getSupportedProfiles() || []).filter((item) => item.api && context.CONNECT_API_MAP?.[item.api]?.selected === "openai").map((item) => ({ kind: "profile", id: item.id, name: item.name || item.id, model: item.model || "" }));
+      return [...models, ...profiles];
+    },
+    async readStore() {
+      if (storage) {
+        const result = await storage.tryGetJson({ namespace: NAMESPACE, key: "state" });
+        return result.found ? result.value : undefined;
+      }
+      return structuredClone(getContext().extensionSettings[NAMESPACE]);
+    },
+    async writeStore(store) {
+      if (storage) {
+        await storage.setJson({ namespace: NAMESPACE, key: "state", value: store });
+      } else {
+        const context = getContext();
+        context.extensionSettings[NAMESPACE] = structuredClone(store);
+        context.saveSettingsDebounced();
+      }
+    },
+    async generate(target, prompt, maxTokens, signal, progress, samplers = DEFAULT_SAMPLERS) {
+      const context = getContext();
+      signal.throwIfAborted();
+      if (!this.listGenerationTargets().some((item) => item.id === target.id && item.kind === target.kind)) {
+        throw new Error("Select an available saved model or Chat Completion profile, then refresh this panel.");
+      }
+      let output;
+      if (target.kind === "model") {
+        const model = savedModels(context).find((item) => item.id === target.id);
+        const payload = await savedModelPayload(model, context, prompt, maxTokens, signal, readProxies, samplers);
+        signal.throwIfAborted();
+        output = await context.ChatCompletionService.processRequest(payload, {}, true, signal);
+      } else {
+        output = await context.ConnectionManagerRequestService.sendRequest(target.id, [{ role: "user", content: prompt }], maxTokens, { stream: true, signal, extractData: true, includePreset: true }, { temperature: samplers.temperature, top_p: samplers.topP });
+      }
+      let text = "";
+      if (typeof output === "function") {
+        for await (const chunk of output()) {
+          signal.throwIfAborted();
+          if (typeof chunk.text === "string") {
+            text = chunk.text;
+            progress(text);
+          }
+        }
+      } else if (typeof output?.content === "string") {
+        text = output.content;
+        progress(text);
+      }
+      signal.throwIfAborted();
+      if (!text.trim())
+        throw new Error("The model returned an empty response.");
+      return text;
+    },
+    subscribe(handler) {
+      const context = getContext();
+      const names = [
+        "CHAT_CHANGED",
+        "CHAT_RENAMED",
+        "CHAT_DELETED",
+        "GROUP_CHAT_DELETED",
+        "MESSAGE_SENT",
+        "MESSAGE_RECEIVED",
+        "MESSAGE_EDITED",
+        "MESSAGE_DELETED",
+        "MESSAGE_SWIPED",
+        "MODEL_TARGET_CREATED",
+        "MODEL_TARGET_UPDATED",
+        "MODEL_TARGET_DELETED",
+        "CONNECTION_PROFILE_CREATED",
+        "CONNECTION_PROFILE_UPDATED",
+        "CONNECTION_PROFILE_DELETED"
+      ];
+      const events = [...new Set(names.map((name) => context.eventTypes[name]).filter(Boolean))];
+      for (const event of events)
+        context.eventSource.on(event, handler);
+      return () => {
+        for (const event of events)
+          context.eventSource.removeListener(event, handler);
+      };
+    }
+  };
+}
+
+// src/core/prompt.ts
+function renderBlocks(items) {
+  if (items.length === 0)
+    return "";
+  return items.map((item) => `## ${item.label}
+${item.content.trim()}`).join(`
+
+`);
+}
+function buildThreadversePrompt(input) {
+  const fandomNotes = input.fandomNotes?.trim() ?? "";
+  return [
+    ...input.previousRanges.length > 0 ? ["# PREVIOUS CONTEXT", renderBlocks(input.previousRanges)] : [],
+    "# RECENT CONTEXT",
+    renderBlocks([input.recentRange]),
+    ...input.fandomContinuity.length > 0 ? ["# FANDOM CONTINUITY", renderBlocks(input.fandomContinuity)] : [],
+    ...fandomNotes ? ["# FANDOM NOTES", fandomNotes] : [],
+    "# INSTRUCTIONS",
+    input.instructions.trim(),
+    "# OUTPUT FORMAT",
+    `You must respond with ONLY valid JSON in this exact format:
+{
+  "title": "thread title",
+  "post": { "username": "name", "body": "text", "score": 0 },
+  "conversations": [
+    {
+      "root": { "id": "c1", "username": "root_a", "body": "independent top-level comment", "score": 120 },
+      "replies": [
+        { "id": "c1-r1", "parent_id": "c1", "username": "reply_a", "body": "direct reply to root_a", "score": 45 },
+        { "id": "c1-r2", "parent_id": "c1-r1", "username": "root_a", "body": "nested reply to reply_a", "score": 31 }
+      ]
+    },
+    {
+      "root": { "id": "c2", "username": "root_b", "body": "another independent top-level comment", "score": 90 },
+      "replies": [
+        { "id": "c2-r1", "parent_id": "c2", "username": "reply_b", "body": "direct reply to root_b", "score": 28 }
+      ]
+    },
+    {
+      "root": { "id": "c3", "username": "root_c", "body": "another independent top-level comment", "score": 70 },
+      "replies": [
+        { "id": "c3-r1", "parent_id": "c3", "username": "reply_c", "body": "direct reply to root_c", "score": 19 }
+      ]
+    }
+  ]
+}
+The example demonstrates structure only; scale the number of conversations and replies to the requested discussion size. Each item in conversations is one separate top-level Reddit conversation and contains exactly one root. Every reply must use parent_id equal to that conversation's root id or to the id of an earlier reply inside the SAME conversation. Never move a root into replies and never reference another conversation. At least 35% of all comments must be replies. With 6 or more comments, create at least 3 separate top-level conversations and give each of at least 3 conversations one or more replies. Do not put the entire discussion beneath one root.
+Return ONLY the JSON—no explanations, no notes, no commentary.`
+  ].join(`
+
+`);
+}
+
 // src/generation.ts
 function appendFeed(store, origin, saved) {
   const previous = store.chats[origin.key]?.feeds || [];
@@ -816,7 +826,7 @@ class Generation {
       }))
         throw new Error("The scene changed. Refresh the list and check your selection before generating.");
       const prompt = scenePrompt(scene, label, input.instructions);
-      const output = await this.host.generate({ kind: input.generationTargetKind, id: input.profileId }, prompt, input.maxTokens, controller.signal, progress);
+      const output = await this.host.generate({ kind: input.generationTargetKind, id: input.profileId }, prompt, input.maxTokens, controller.signal, progress, { temperature: input.temperature, topP: input.topP });
       controller.signal.throwIfAborted();
       const feed = parseGeneratedThreadverseFeed(output);
       const saved = {
@@ -923,6 +933,27 @@ async function mountUi(host) {
         </div>
         <div class="sth-card">
           <label class="sth-field">Scene title<input type="text" data-label maxlength="200" placeholder="Chapter, episode or scene"></label>
+          <p class="sth-hint">Choose your connection, samplers and instructions in Settings.</p>
+          <div class="sth-toolbar"><button type="button" class="sth-primary" data-generate>Generate feed</button>
+            <button type="button" data-cancel hidden>Cancel generation</button>
+            <button type="button" data-preview>Preview prompt</button></div>
+          <details data-prompt-preview hidden><summary>Prompt sent to the model</summary><pre class="sth-output" data-prompt></pre></details>
+          <details><summary>Model response</summary><pre class="sth-output" data-output></pre></details>
+        </div>
+      </section>
+      <section data-panel="settings" hidden>
+        <div class="sth-card"><h3>Connection</h3>
+          <label class="sth-field">Generation model<select data-profile><option value="">Choose a model or profile…</option></select></label>
+          <p class="sth-hint" data-profile-hint></p>
+        </div>
+        <div class="sth-card"><h3>Samplers</h3>
+          <div class="sth-samplers">
+            <label class="sth-field">Max output tokens<input type="number" data-tokens min="256" max="32768" step="1"></label>
+            <label class="sth-field">Temperature<input type="number" data-temperature min="0" max="2" step="0.01"></label>
+            <label class="sth-field">Top P<input type="number" data-top-p min="0" max="1" step="0.01"></label>
+          </div>
+        </div>
+        <div class="sth-card"><h3>Instructions</h3>
           <label class="sth-field">Instruction preset<select data-preset></select></label>
           <div class="sth-toolbar"><button type="button" data-new-preset>New preset</button>
             <button type="button" data-duplicate-preset>Duplicate</button>
@@ -933,20 +964,9 @@ async function mountUi(host) {
           </details>
           <p class="sth-hint">These instructions are sent with the selected messages. The feed JSON format is added automatically.</p>
           <div class="sth-toolbar"><button type="button" data-save-presets>Save presets</button><span class="sth-hint" data-preset-status></span></div>
-          <label class="sth-field">Generation model<select data-profile><option value="">Choose a model or profile…</option></select></label>
-          <p class="sth-hint" data-profile-hint></p>
-          <div class="sth-toolbar"><button type="button" class="sth-primary" data-generate>Generate feed</button>
-            <button type="button" data-cancel hidden>Cancel generation</button>
-            <button type="button" data-preview>Preview prompt</button></div>
-          <details data-prompt-preview hidden><summary>Prompt sent to the model</summary><pre class="sth-output" data-prompt></pre></details>
-          <details><summary>Model response</summary><pre class="sth-output" data-output></pre></details>
         </div>
+        <button type="button" class="sth-primary" data-save-settings>Save settings</button>
       </section>
-      <section data-panel="settings" hidden><div class="sth-card">
-        <label class="sth-field">Response token limit<input type="number" data-tokens min="256" max="32768" step="1"></label>
-        <p class="sth-hint">This first version discusses only the selected scene. Continuity between feeds and regex support will follow in future updates.</p>
-        <button type="button" data-save-settings>Save settings</button>
-      </div></section>
     </div>`;
   document.body.append(dialog);
   function query(selector) {
@@ -963,8 +983,12 @@ async function mountUi(host) {
   const presetSelect = query("[data-preset]");
   const presetName = query("[data-preset-name]");
   const tokens = query("[data-tokens]");
+  const temperature = query("[data-temperature]");
+  const topP = query("[data-top-p]");
   instructions.value = store.settings.instructions;
   tokens.value = String(store.settings.maxTokens);
+  temperature.value = String(store.settings.temperature);
+  topP.value = String(store.settings.topP);
   function capturePreset() {
     const draft = presetDraft.find((item) => item.id === activePresetId);
     if (draft.name !== presetName.value || draft.instructions !== instructions.value) {
@@ -1065,7 +1089,9 @@ async function mountUi(host) {
     return validateSettings({
       profileId: target?.id || "",
       generationTargetKind: target?.kind || "profile",
-      maxTokens: Number(tokens.value),
+      maxTokens: tokens.valueAsNumber,
+      temperature: temperature.valueAsNumber,
+      topP: topP.valueAsNumber,
       instructions: instructions.value,
       instructionPresets: structuredClone(presetDraft),
       activeInstructionPresetId: activePresetId
@@ -1077,7 +1103,7 @@ async function mountUi(host) {
     query("[data-cancel]").hidden = !generation.running;
     query("[data-cancel]").disabled = generation.committing;
     query("[data-save-settings]").disabled = busy;
-    for (const input of dialog.querySelectorAll("[data-preset], [data-preset-name], [data-instructions], [data-tokens], [data-save-presets], [data-new-preset], [data-duplicate-preset], [data-delete-preset]"))
+    for (const input of dialog.querySelectorAll("[data-preset], [data-preset-name], [data-instructions], [data-tokens], [data-temperature], [data-top-p], [data-save-presets], [data-new-preset], [data-duplicate-preset], [data-delete-preset]"))
       input.disabled = busy;
     query("[data-delete-preset]").disabled = busy || presetDraft.length <= 1;
     query("[data-new-preset]").disabled = busy || presetDraft.length >= MAX_INSTRUCTION_PRESETS;
@@ -1117,7 +1143,7 @@ async function mountUi(host) {
   }
   function targetHint() {
     const target = availableTargets.find((item) => targetValue(item) === profile.value);
-    query("[data-profile-hint]").textContent = target?.kind === "model" ? "Uses the saved model connection and your feed instructions. Temperature: 0.8; no roleplay generation preset is applied." : target?.kind === "profile" ? "Uses the profile and its generation settings without changing your roleplay connection." : availableTargets.length ? "Choose a saved model or connection profile for this feed." : "Save a Chat Completion model or connection profile in Connection Manager, then refresh this panel.";
+    query("[data-profile-hint]").textContent = target?.kind === "model" ? "Uses the saved model connection with your samplers and instructions." : target?.kind === "profile" ? "Uses the connection profile with your samplers and instructions." : availableTargets.length ? "Choose a saved model or connection profile for this feed." : "Save a Chat Completion model or connection profile in Connection Manager, then refresh this panel.";
   }
   function renderMessages() {
     const queryText = search.value.trim().toLocaleLowerCase();
