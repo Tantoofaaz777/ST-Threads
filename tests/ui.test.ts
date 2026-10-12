@@ -53,6 +53,7 @@ test('mounts the launcher, selects messages, generates a feed and cleans up the 
   cleanup = await mountUi(f.host)
   expect(document.querySelectorAll('.sth-launcher')).toHaveLength(1)
   button('.sth-launcher button').click()
+  button('[data-tab="make"]').click()
   const selected = document.querySelector<HTMLInputElement>('[data-index="0"]')!
   selected.click()
   const profile = document.querySelector<HTMLSelectElement>('[data-profile]')!

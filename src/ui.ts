@@ -51,13 +51,14 @@ export async function mountUi(host: Host): Promise<() => void> {
     <header class="sth-header"><div><h2 id="sth-title">ST Threads</h2><p data-chat>Open a chat to get started.</p></div>
       <button type="button" data-close aria-label="Close panel">✕</button></header>
     <nav class="sth-tabs" aria-label="ST Threads sections">
-      <button type="button" data-tab="make" aria-pressed="true">Create feed</button>
-      <button type="button" data-tab="feeds" aria-pressed="false">Saved feeds</button>
+      <button type="button" data-tab="feeds" aria-pressed="true">Feed</button>
+      <button type="button" data-tab="make" aria-pressed="false">Make</button>
       <button type="button" data-tab="settings" aria-pressed="false">Settings</button>
     </nav>
     <div class="sth-status" data-status role="status" aria-live="polite"></div>
     <div class="sth-content">
-      <section data-panel="make">
+      <section data-panel="feeds"><p class="sth-hint">The latest 10 feeds are saved for each chat.</p><div data-feeds></div></section>
+      <section data-panel="make" hidden>
         <div class="sth-card"><h3>Select a scene</h3>
           <p>Select the messages the fandom will discuss. The feed stays separate from your roleplay.</p>
           <div class="sth-toolbar"><button type="button" data-refresh>Refresh</button>
@@ -90,7 +91,6 @@ export async function mountUi(host: Host): Promise<() => void> {
           <details><summary>Model response</summary><pre class="sth-output" data-output></pre></details>
         </div>
       </section>
-      <section data-panel="feeds" hidden><p class="sth-hint">The latest 10 feeds are saved for each chat.</p><div data-feeds></div></section>
       <section data-panel="settings" hidden><div class="sth-card">
         <label class="sth-field">Response token limit<input type="number" data-tokens min="256" max="32768" step="1"></label>
         <p class="sth-hint">This first version discusses only the selected scene. Continuity between feeds and regex support will follow in future updates.</p>
