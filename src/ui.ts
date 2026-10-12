@@ -82,8 +82,8 @@ export async function mountUi(host: Host): Promise<() => void> {
       </section>
       <section data-panel="settings" hidden>
         <div class="sth-card"><h3>Connection</h3>
-          <label class="sth-field">Generation model<select data-profile><option value="">Choose a model or profile…</option></select></label>
-          <p class="sth-hint" data-profile-hint></p>
+          <div class="sth-field"><select data-profile aria-label="Connection"><option value="">Choose a model or profile…</option></select></div>
+          <p class="sth-hint" data-profile-hint hidden></p>
         </div>
         <div class="sth-card"><h3>Samplers</h3>
           <div class="sth-samplers">
@@ -93,15 +93,12 @@ export async function mountUi(host: Host): Promise<() => void> {
           </div>
         </div>
         <div class="sth-card"><h3>Instructions</h3>
-          <label class="sth-field">Instruction preset<select data-preset></select></label>
+          <div class="sth-field"><select data-preset aria-label="Instruction preset"></select></div>
           <div class="sth-toolbar"><button type="button" data-new-preset>New preset</button>
             <button type="button" data-duplicate-preset>Duplicate</button>
             <button type="button" data-delete-preset>Delete preset</button></div>
-          <details data-preset-editor open><summary>Edit instruction preset</summary>
-            <label class="sth-field">Preset name<input type="text" data-preset-name maxlength="100"></label>
-            <label class="sth-field">Fandom instructions<textarea data-instructions rows="9"></textarea></label>
-          </details>
-          <p class="sth-hint">These instructions are sent with the selected messages. The feed JSON format is added automatically.</p>
+          <label class="sth-field">Preset name<input type="text" data-preset-name maxlength="100"></label>
+          <label class="sth-field">Fandom instructions<textarea data-instructions rows="9"></textarea></label>
           <div class="sth-toolbar"><button type="button" data-save-presets>Save presets</button><span class="sth-hint" data-preset-status></span></div>
         </div>
         <button type="button" class="sth-primary" data-save-settings>Save settings</button>
@@ -175,7 +172,6 @@ export async function mountUi(host: Host): Promise<() => void> {
     presetsDirty = true
     if (snapshot) chatPresetSelections.set(snapshot.key, activePresetId)
     renderPresets()
-    query<HTMLDetailsElement>('[data-preset-editor]').open = true
     if (action !== 'delete') { presetName.focus(); presetName.select() }
     status('Preset changes are kept in the panel. Save presets or generate a feed to save them.')
   }
@@ -219,7 +215,8 @@ export async function mountUi(host: Host): Promise<() => void> {
     query<HTMLButtonElement>('[data-delete-preset]').disabled = busy || presetDraft.length <= 1
     query<HTMLButtonElement>('[data-new-preset]').disabled = busy || presetDraft.length >= MAX_INSTRUCTION_PRESETS
     query<HTMLButtonElement>('[data-duplicate-preset]').disabled = busy || presetDraft.length >= MAX_INSTRUCTION_PRESETS
-    query('[data-preset-status]').textContent = presetsDirty ? 'Unsaved preset changes' : 'Save or generate to remember this chat\'s selection.'
+    query('[data-preset-status]').textContent = presetsDirty ? 'Unsaved preset changes' : ''
+    query('[data-preset-status]').hidden = !presetsDirty
     profile.disabled = busy
     query('[data-count]').textContent = `${selection.size} selected`
     updatePreview()
@@ -245,16 +242,18 @@ export async function mountUi(host: Host): Promise<() => void> {
       }
       profile.value = availableTargets.some(item => targetValue(item) === previous) ? previous : ''
       targetHint()
-    } catch (error) { query('[data-profile-hint]').textContent = errorText(error) }
+    } catch (error) {
+      query('[data-profile-hint]').textContent = errorText(error)
+      query('[data-profile-hint]').hidden = false
+    }
     controls()
   }
   function targetHint(): void {
     const target = availableTargets.find(item => targetValue(item) === profile.value)
-    query('[data-profile-hint]').textContent = target?.kind === 'model'
-      ? 'Uses the saved model connection with your samplers and instructions.'
-      : target?.kind === 'profile' ? 'Uses the connection profile with your samplers and instructions.'
+    query('[data-profile-hint]').textContent = target ? ''
       : availableTargets.length ? 'Choose a saved model or connection profile for this feed.'
       : 'Save a Chat Completion model or connection profile in Connection Manager, then refresh this panel.'
+    query('[data-profile-hint]').hidden = Boolean(target)
   }
   function renderMessages(): void {
     const queryText = search.value.trim().toLocaleLowerCase()

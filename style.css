@@ -45,7 +45,8 @@
 .sth-range label input { display: block; width: 100%; margin-top: 6px; }
 .sth-range button { align-self: end; }
 .sth-field { display: flex; flex-direction: column; gap: 7px; margin: 12px 0; }
-.sth-samplers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.sth-samplers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 12px; }
+.sth-samplers > :first-child { grid-column: 1 / -1; }
 .sth-dialog input:not([type="checkbox"]), .sth-dialog textarea, .sth-dialog select {
   width: 100%; padding: 10px; border: 1px solid var(--sth-border); border-radius: 8px;
   background: #0002; color: var(--sth-text); box-shadow: none;
@@ -69,7 +70,6 @@
 .sth-scene { margin: 14px 0; padding: 10px 0; border-block: 1px solid var(--sth-border); }
 .sth-dialog summary { cursor: pointer; }
 @media (max-width: 560px) {
-  .sth-samplers { grid-template-columns: 1fr; gap: 0; }
   .sth-dialog { width: 98vw; height: 96dvh; max-height: 98dvh; border-radius: 10px; font-size: 14px; }
   .sth-header { padding: 12px; }
   .sth-tabs { padding: 0 12px 10px; gap: 4px; }
